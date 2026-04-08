@@ -1,0 +1,268 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --positive: #0a6847;
+  --negative: #a4133c;
+  --neutral: #3c2f80;
+  --seed: #7c5cfc;
+  --bg-dark: #1a1a2e;
+  --bg-card: #ffffff;
+  --bg-light: #fafafa;
+  --text-primary: #1a1a2e;
+  --text-secondary: #4a5568;
+  --border-subtle: #e2e8f0;
+  --accent-gradient: linear-gradient(90deg, #7c5cfc 0%, #00d4aa 50%, #e91e8c 100%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'JetBrains Mono', monospace;
+  background: var(--bg-light);
+  margin: 0;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* Modern input styling */
+input, textarea, select {
+  font-family: inherit;
+}
+
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: var(--seed) !important;
+  box-shadow: 0 0 0 3px rgba(43, 108, 176, 0.15);
+}
+
+/* Modern button styling */
+button {
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+button:active {
+  transform: scale(0.98);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+/* React Flow nodes */
+.react-flow__node {
+  cursor: pointer;
+}
+
+/* Hide handles by default */
+.react-flow__handle {
+  opacity: 0;
+  width: 8px !important;
+  height: 8px !important;
+  min-width: 8px !important;
+  min-height: 8px !important;
+}
+
+.react-flow__node:hover .react-flow__handle {
+  opacity: 0.5;
+}
+
+.react-flow__edge-path {
+  stroke-width: 2;
+}
+
+.consequence-node {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  backdrop-filter: blur(8px);
+}
+
+.consequence-node:hover {
+  transform: scale(1.02);
+  box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.15);
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(0.95); opacity: 1; }
+  100% { transform: scale(1.3); opacity: 0; }
+}
+
+.generating-pulse::before {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: inherit;
+  background: inherit;
+  animation: pulse-ring 1.5s ease-out infinite;
+  z-index: -1;
+}
+
+@keyframes newExpandGlow {
+  0%, 100% { box-shadow: 0 0 8px 2px rgba(214, 158, 46, 0.3); }
+  50% { box-shadow: 0 0 18px 6px rgba(214, 158, 46, 0.5); }
+}
+
+.newly-expanded-glow {
+  animation: newExpandGlow 2s ease-in-out infinite;
+}
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.fade-in-up {
+  animation: fadeInUp 0.3s ease-out forwards;
+}
+
+.steep-badge {
+  font-size: 0.65rem;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* React Flow overrides */
+.react-flow__attribution {
+  display: none;
+}
+
+.react-flow__edge-path {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: stroke-width 0.2s ease, opacity 0.2s ease;
+}
+
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke-width: 3px !important;
+  opacity: 1 !important;
+  filter: drop-shadow(0 0 3px currentColor);
+}
+
+.react-flow__edge.smoothstep .react-flow__edge-path {
+  stroke-linecap: round;
+}
+
+.react-flow__edge .react-flow__arrowhead {
+  fill: currentColor;
+}
+
+.react-flow__edge.animated .react-flow__edge-path {
+  stroke-dasharray: 5;
+  animation: dash 0.5s linear infinite;
+}
+
+@keyframes dash {
+  to { stroke-dashoffset: -10; }
+}
+
+.react-flow__edges {
+  z-index: 0 !important;
+}
+
+.react-flow__nodes {
+  z-index: 1 !important;
+}
+
+/* Gradient bar like in reference image */
+.gradient-bar {
+  height: 4px;
+  background: var(--accent-gradient);
+  border-radius: 2px;
+}
+
+/* Modern card styling */
+.modern-card {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  transition: all 0.2s ease;
+}
+
+.modern-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+  border-color: #d1d5db;
+}
+
+/* Stats display */
+.stat-value {
+  font-weight: 600;
+}
+
+/* Pill buttons */
+.pill-button {
+  padding: 6px 14px;
+  border-radius: 50px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  border: 1px solid #e5e7eb;
+  background: white;
+  color: #374151;
+  transition: all 0.15s ease;
+}
+
+.pill-button:hover {
+  background: var(--seed);
+  border-color: var(--seed);
+  color: white;
+}
+
+/* Progress bar with gradient */
+.progress-bar-gradient {
+  height: 6px;
+  background: #e5e7eb;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-bar-gradient .progress-fill {
+  height: 100%;
+  background: var(--accent-gradient);
+  transition: width 0.5s ease;
+}
+
+/* Detail panel */
+.detail-panel {
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.1);
+}
+
+/* API key success state */
+.api-success {
+  background: linear-gradient(90deg, rgba(34, 197, 94, 0.08) 0%, rgba(34, 197, 94, 0.02) 100%);
+  border-color: #22c55e !important;
+}
+
+.react-flow__background {
+  background: #ffffff !important;
+}

@@ -1,0 +1,29 @@
+# Dependencies
+node_modules
+
+# Build output (will be created in container)
+dist
+
+# Development files
+*.log
+.git
+.gitignore
+# Note: .env is NOT ignored - it contains the pre-configured API key for testing
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Mac app bundle (not needed for Docker)
+Futurescape.app
+*.command
+
+# Documentation
+*.md
+!README.md
