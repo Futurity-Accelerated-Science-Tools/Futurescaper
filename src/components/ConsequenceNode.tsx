@@ -59,22 +59,22 @@ function ActionToolbar({
 }) {
   return (
     <div
-      className="node-action-toolbar absolute flex items-center gap-2 z-50"
-      style={{ top: 'calc(100% + 8px)', left: '50%', transform: 'translateX(-50%)' }}
+      className="node-action-toolbar absolute flex items-center gap-3 z-50"
+      style={{ top: 'calc(100% + 12px)', left: '50%', transform: 'translateX(-50%)' }}
       onClick={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
     >
       {/* Management group */}
-      <div className="flex items-center bg-white/95 backdrop-blur-sm rounded-xl shadow-lg border border-slate-200/80 p-1 gap-1">
-        <ActionBtn icon={<Pencil className="w-3.5 h-3.5" />} label="Edit" onClick={onEdit} bg="bg-blue-500" hoverBg="hover:bg-blue-600" delay={0} />
-        <ActionBtn icon={<Trash2 className="w-3.5 h-3.5" />} label="Delete" onClick={onDelete} bg="bg-red-500" hoverBg="hover:bg-red-600" delay={1} />
+      <div className="flex items-center bg-white/95 backdrop-blur-sm rounded-xl shadow-lg border border-slate-200/80 p-1.5 gap-1.5">
+        <ActionBtn icon={<Pencil className="w-6 h-6" />} label="Edit" onClick={onEdit} bg="bg-blue-500" hoverBg="hover:bg-blue-600" delay={0} />
+        <ActionBtn icon={<Trash2 className="w-6 h-6" />} label="Delete" onClick={onDelete} bg="bg-red-500" hoverBg="hover:bg-red-600" delay={1} />
       </div>
 
       {/* Creation group */}
-      <div className="flex items-center bg-white/95 backdrop-blur-sm rounded-xl shadow-lg border border-slate-200/80 p-1 gap-1">
-        <ActionBtn icon={<Plus className="w-3.5 h-3.5" />} label="Add Child" onClick={onAddChild} bg="bg-green-500" hoverBg="hover:bg-green-600" delay={2} />
+      <div className="flex items-center bg-white/95 backdrop-blur-sm rounded-xl shadow-lg border border-slate-200/80 p-1.5 gap-1.5">
+        <ActionBtn icon={<Plus className="w-6 h-6" />} label="Add Child" onClick={onAddChild} bg="bg-green-500" hoverBg="hover:bg-green-600" delay={2} />
         <ActionBtn
-          icon={isGeneratingChildren ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+          icon={isGeneratingChildren ? <Loader2 className="w-6 h-6 animate-spin" /> : <Sparkles className="w-6 h-6" />}
           label={isGeneratingChildren ? 'Generating...' : 'AI Expand'}
           onClick={onGenerateChildren}
           disabled={isGeneratingChildren}
@@ -83,7 +83,7 @@ function ActionToolbar({
           delay={3}
         />
         <ActionBtn
-          icon={isGeneratingIdeas ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Lightbulb className="w-3.5 h-3.5" />}
+          icon={isGeneratingIdeas ? <Loader2 className="w-6 h-6 animate-spin" /> : <Lightbulb className="w-6 h-6" />}
           label={isGeneratingIdeas ? 'Generating...' : 'Ideas'}
           onClick={onGenerateIdeas}
           disabled={isGeneratingIdeas}
@@ -115,7 +115,7 @@ function ActionBtn({
 }) {
   return (
     <button
-      className={`node-action-btn relative w-8 h-8 rounded-lg flex items-center justify-center text-white shadow-sm transition-colors group ${bg} ${hoverBg} ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+      className={`node-action-btn relative w-14 h-14 rounded-xl flex items-center justify-center text-white shadow-md transition-colors group ${bg} ${hoverBg} ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
       style={{ animationDelay: `${delay * 40}ms` }}
       onClick={(e) => { e.stopPropagation(); if (!disabled) onClick(); }}
       onPointerDown={(e) => e.stopPropagation()}
@@ -190,7 +190,7 @@ function EditModeView({
         onChange={(e) => setText(e.target.value)}
         onKeyDown={handleKeyDown}
         className="w-full text-sm border border-slate-300 rounded-lg px-2 py-1.5 resize-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200 outline-none"
-        rows={3}
+        rows={15}
         placeholder="Describe the consequence..."
         onPointerDown={(e) => e.stopPropagation()}
       />
@@ -312,6 +312,29 @@ export interface ConsequenceNodeData {
 }
 
 // ─── ConsequenceNode ──────────────────────────────────────────────
+// Custom equality check: compare rendering-relevant data fields, ignore function references
+function consequenceNodeAreEqual(
+  prev: NodeProps<ConsequenceNodeData>,
+  next: NodeProps<ConsequenceNodeData>,
+): boolean {
+  const p = prev.data;
+  const n = next.data;
+  return (
+    p.consequence === n.consequence &&
+    p.isSelected === n.isSelected &&
+    p.isEditing === n.isEditing &&
+    p.isDimmed === n.isDimmed &&
+    p.isFocusDimmed === n.isFocusDimmed &&
+    p.isGenerating === n.isGenerating &&
+    p.isGeneratingChildren === n.isGeneratingChildren &&
+    p.isGeneratingIdeas === n.isGeneratingIdeas &&
+    p.isNewlyExpanded === n.isNewlyExpanded &&
+    p.isPlaceholder === n.isPlaceholder &&
+    p.isGenerationInProgress === n.isGenerationInProgress &&
+    prev.draggable === next.draggable
+  );
+}
+
 export const ConsequenceNode = memo(({ data, draggable }: NodeProps<ConsequenceNodeData>) => {
   const {
     consequence,
@@ -567,7 +590,7 @@ export const ConsequenceNode = memo(({ data, draggable }: NodeProps<ConsequenceN
       </div>
     </div>
   );
-});
+}, consequenceNodeAreEqual);
 
 ConsequenceNode.displayName = 'ConsequenceNode';
 
@@ -596,15 +619,15 @@ function SeedActionToolbar({
 }) {
   return (
     <div
-      className="node-action-toolbar absolute flex items-center gap-2 z-50"
-      style={{ top: 'calc(100% + 8px)', left: '50%', transform: 'translateX(-50%)' }}
+      className="node-action-toolbar absolute flex items-center gap-3 z-50"
+      style={{ top: 'calc(100% + 12px)', left: '50%', transform: 'translateX(-50%)' }}
       onClick={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <div className="flex items-center bg-white/95 backdrop-blur-sm rounded-xl shadow-lg border border-slate-200/80 p-1 gap-1">
-        <ActionBtn icon={<Plus className="w-3.5 h-3.5" />} label="Add Child" onClick={onAddChild} bg="bg-green-500" hoverBg="hover:bg-green-600" delay={0} />
+      <div className="flex items-center bg-white/95 backdrop-blur-sm rounded-xl shadow-lg border border-slate-200/80 p-1.5 gap-1.5">
+        <ActionBtn icon={<Plus className="w-6 h-6" />} label="Add Child" onClick={onAddChild} bg="bg-green-500" hoverBg="hover:bg-green-600" delay={0} />
         <ActionBtn
-          icon={isGeneratingChildren ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+          icon={isGeneratingChildren ? <Loader2 className="w-6 h-6 animate-spin" /> : <Sparkles className="w-6 h-6" />}
           label={isGeneratingChildren ? 'Generating...' : 'AI Generate'}
           onClick={onGenerateChildren}
           disabled={isGeneratingChildren}

@@ -285,3 +285,57 @@ If the refactor goes wrong mid-way:
 - Bug fixes in same commit:
   - `prevConsequenceJsonRef` initialized to `'__uninitialized__'` (was `''`) — fixes seed node not appearing in manual mode
   - Removed `backdrop-filter: blur(8px)` from `.consequence-node` — fixes blur on selected nodes
+
+### Post-Refactor: UI Rearchitecture & Performance Optimizations
+
+#### DetailPanel Removal
+- Status: COMPLETE
+- Removed `DetailPanel` from the left sidebar. All node actions (Edit, Delete, Add Child, AI Expand, Ideas) are now exclusively on the `ActionToolbar` rendered directly on each selected consequence node.
+- Node selection now triggers focus-path animation + auto-center instead of populating a sidebar panel.
+
+#### Add Manual Node Button & AddNodeModal Removal
+- Status: COMPLETE
+- Removed the "Add Manual Node" button from the sidebar header and the `AddNodeModal` dialog.
+- Manual node creation is now done via the "Add Child" button on the seed or any consequence node's ActionToolbar.
+
+#### Filter Panel Migration to On-Map Right Panel
+- Status: COMPLETE
+- Moved highlight filters from the left sidebar to a collapsible panel anchored to the right edge of the ReactFlow canvas.
+- Panel uses a vertical list layout with full labels (e.g. "Social" instead of "Soci") and per-filter node counts.
+- Collapsed state (44px): icon strip with category/sentiment/probability/importance/reset buttons.
+- Expanded state (240px): full filter controls with "Key Only" quick toggle and "Reset" button.
+- New state: `filterPanelCollapsed` (boolean).
+
+#### TL;DR Items Clickable
+- Status: COMPLETE
+- Top Concerns and Top Opportunities items in the TL;DR sidebar section are now clickable.
+- Clicking an item calls `setActiveNodeId(c.id)`, which triggers the focus-path animation, auto-center + zoom, and node selection highlight.
+- Hover states: `cursor-pointer`, `text-slate-900`, border color intensifies.
+
+#### Auto-Center + Zoom on Node Selection
+- Status: COMPLETE
+- New `centerOnNode()` callback uses `ReactFlowInstance.setCenter()` for programmatic viewport control.
+- Blends 60% selected-node position with 40% ancestor-chain centroid for context-preserving centering.
+- Viewport clamping ensures the selected node is fully visible with 80px margin.
+- `reactFlowInstanceRef` captured via `onInit` callback on the ReactFlow component.
+- `mapContainerRef` provides container dimensions for viewport size calculations.
+
+#### Auto-fitView on New Nodes
+- Status: COMPLETE
+- When `syncGraphStructure()` detects new nodes added (`addedIds.size > 0`), it calls `reactFlowInstance.fitView()` after a 100ms delay.
+- Ensures the viewport expands to show all newly added nodes during AI generation or manual expansion.
+
+#### Action Toolbar Scaled 2x Bigger
+- Status: COMPLETE
+- ActionToolbar buttons changed from small pill-style to 56x56px (`w-14 h-14`) icon-only squares with `w-6 h-6` icons.
+- Two grouped containers: management (Edit, Delete) and creation (Add Child, AI Expand, Ideas).
+- Includes Ideas button (amber, Lightbulb icon) for generating solution/idea nodes directly from the toolbar.
+
+#### Performance Optimizations
+- Status: COMPLETE
+- **nodesRef**: `useRef<Node[]>` mirrors `nodes` state, used in `syncGraphStructure` and `handleNodeDragStop` to read current positions without adding `nodes` to callback dependencies.
+- **consequenceMap / parentMap**: `useMemo` maps (keyed by consequence ID / parent ID) rebuilt only when `consequences` changes. Provides O(1) lookup for `getAncestorChain`, `handleCancelEdit`, `handleAddChild`, etc.
+- **Custom areEqual on ConsequenceNode**: `consequenceNodeAreEqual()` compares 11 rendering-relevant fields and `draggable`, ignoring 8 callback function references. Prevents re-render when callbacks are recreated by `useCallback`.
+- **Single-pass stats**: Replaced multiple `.filter().length` calls with a single `for` loop in the `stats` useMemo, computing bySentiment, byOrder, byCategory, byProbability, byImportance, and ideasCount in one pass.
+- **Edge identity preservation**: In `updateNodeDataOnly()`, each edge is compared field-by-field (zIndex, animated, stroke, strokeWidth, opacity, strokeDasharray) and the original object reference is returned if nothing changed, reducing ReactFlow's internal diffing work.
+- **Double-setNodes elimination on click**: When `activeNodeId` changes to a non-seed node, the data-only update effect detects the change and skips, deferring to the focus-path effect which performs a combined position + data update in a single `setNodes` call.

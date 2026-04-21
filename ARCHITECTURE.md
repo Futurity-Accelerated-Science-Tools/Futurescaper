@@ -1,6 +1,6 @@
 # Futurescaper -- Architecture Document
 
-> Last updated: 2026-04-21
+> Last updated: 2026-04-21 (rev 2)
 
 ---
 
@@ -8,12 +8,12 @@
 
 Futurescaper is a single-page React application that generates interactive **consequence maps** for futures analysis. Given a scenario (e.g., "AI replaces white-collar jobs by 2030"), it uses the **STEEPE framework** (Social, Technological, Economic, Environmental, Political, **Ethical**) and the **Synthesizing Futures** methodology to map cascading consequences across **up to 5 orders** of impact, then generates actionable solutions and ideas that appear as nodes directly on the graph.
 
-The user interacts with a radial force-directed graph built on React Flow. Every consequence is a clickable node with a floating radial action menu. The map supports AI-powered expansion, manual node creation, free-prompt natural-language expansion, inline editing, JSON import/export, and multi-format report export.
+The user interacts with a radial force-directed graph built on React Flow. Every consequence is a clickable node with a floating action toolbar. The map supports AI-powered expansion, manual node creation (via the seed or any node's action toolbar), free-prompt natural-language expansion, inline editing, JSON import/export, and multi-format report export.
 
 ### Key Design Principles
 
-- **Graph-first**: The radial consequence map IS the primary interface. Sidebar panels are secondary.
-- **Interactive nodes**: Every node is clickable, editable, expandable, and deletable via a floating radial menu.
+- **Graph-first**: The radial consequence map IS the primary interface. The left sidebar holds summary/export; filters live on an on-map right panel.
+- **Interactive nodes**: Every node is clickable, editable, expandable, and deletable via a floating action toolbar below the node.
 - **Progressive generation**: Consequences appear on the graph as each phase completes (not all at once).
 - **Mixed human + AI**: Users can build maps entirely by hand (Manual Mode), entirely via AI, or any mix.
 - **Single-file deployable**: Vite's `vite-plugin-singlefile` compiles everything into one `index.html`.
@@ -44,7 +44,7 @@ The user interacts with a radial force-directed graph built on React Flow. Every
 There is no router. The app has two screens, toggled by the presence of `input` state in `App.tsx`:
 
 1. **InputForm** -- scenario entry, file upload, URL fetch, web research, JSON import, Manual Mode button
-2. **FuturescapeMap** -- the full graph view with sidebar, filters, detail panel, free-prompt bar
+2. **FuturescapeMap** -- the full graph view with sidebar, on-map filter panel, free-prompt bar
 
 State is managed entirely via `useState` hooks in `App.tsx` (top-level: `input`, `importedData`, `manualMode`) and `FuturescapeMap.tsx` (everything else). There is no Redux, Zustand, or Context API.
 
@@ -71,10 +71,9 @@ FuturescapeMap
   |     |--> findRelevantSubjects() [post-generation]
   |
   |--> Manual interactions:
-  |     |--> Radial menu: Edit, Add Child, AI Generate Children, Delete
-  |     |--> Seed radial menu: Add Child, AI Generate Children
+  |     |--> Action toolbar: Edit, Delete, Add Child, AI Expand, Ideas
+  |     |--> Seed action toolbar: Add Child, AI Generate Children
   |     |--> Free-prompt expansion bar
-  |     |--> DetailPanel: Expand node, Generate ideas
   |     |--> Inline editing (text, sentiment, category, probability, importance)
   |
   |--> consequences[] state updates --> generateNodesAndEdges() --> React Flow render
@@ -89,22 +88,21 @@ App
  +-- FuturescapeMap
       +-- ReactFlow
       |    +-- SeedNode (custom node type)
-      |    |    +-- SeedRadialMenu (Add Child, AI Generate)
-      |    +-- ConsequenceNode (custom node type, memo'd)
-      |    |    +-- RadialMenu (Edit, Add Child, AI Generate, Delete)
+      |    |    +-- SeedActionToolbar (Add Child, AI Generate)
+      |    +-- ConsequenceNode (custom node type, memo'd with custom areEqual)
+      |    |    +-- ActionToolbar (Edit, Delete | Add Child, AI Expand, Ideas)
       |    |    +-- EditModeView (inline form: text, sentiment, category, probability, importance)
       |    |    +-- Placeholder skeleton (when AI is generating)
       |    +-- Background, Controls, MiniMap
+      |    +-- On-map Filter Panel (right side, collapsible, vertical list layout)
+      |    +-- Tidy Layout button (top-right, post-generation)
       +-- Sidebar (left, 320px)
       |    +-- GenerationProgress / Manual Mode indicator
-      |    +-- TL;DR Summary (collapsible)
-      |    +-- Highlight Filters (category, sentiment, order, probability, importance, ideas toggle)
+      |    +-- TL;DR Summary (collapsible, items clickable to select + center node)
       |    +-- RelatedSubjects
-      |    +-- DetailPanel (selected node details, expand, generate ideas, delete)
       |    +-- ExportPanel (JSON, CSV, Markdown, Share)
       +-- Center progress overlay (during generation)
       +-- Floating prompt bar (bottom-center, post-generation)
-      +-- AddNodeModal (manual node creation dialog)
 ```
 
 ---
@@ -290,21 +288,23 @@ Nodes scale physically based on importance:
 
 ## Graph Layout Algorithm
 
-The layout is a **custom radial algorithm** in `FuturescapeMap.generateNodesAndEdges()`. It is NOT a force simulation.
+The layout is a **custom radial algorithm** in `src/layout.ts` (`computeRadialLayout()` + `resolveCollisions()`). It is NOT a force simulation. Layout functions are pure (no React dependencies) and testable independently.
 
 ### Radial Rings
 
 Each consequence order occupies a concentric ring around the central seed node:
 
-| Order | Label | Min Radius | Description |
+| Order | Label | Min/Base Radius | Description |
 |---|---|---|---|
-| 1 | Direct | 500px | Evenly spaced on a circle around seed |
-| 2 | Ripple | 900px | Grouped around their order-1 parent, spread in arcs |
-| 3 | Cascade | 1400px | Grouped around their order-2 parent |
-| 4 | Systemic | 1900px | Grouped around their order-3 parent |
-| 5 | Wildcard | 2400px | Grouped around their order-4 parent |
+| 1 | Direct | 400/500px | Evenly spaced on a circle around seed; incremental adds fill angular gaps |
+| 2 | Ripple | 750/900px | Grouped around their order-1 parent, spread in arcs |
+| 3 | Cascade | 1200/1400px | Grouped around their order-2 parent |
+| 4 | Systemic | 1700/1900px | Grouped around their order-3 parent |
+| 5 | Wildcard | 2200/2400px | Grouped around their order-4 parent |
 
-**Dynamic radius**: If the number of nodes at a given order requires more circumference than `2 * PI * minRadius`, the radius expands to `(nodeCount * (250 + 30)) / (2 * PI)`.
+**Dynamic radius**: If the number of nodes at a given order requires more circumference than `2 * PI * baseRadius`, the radius expands to `(nodeCount * (250 + 30)) / (2 * PI)`.
+
+**Collision resolution**: After radial placement, `resolveCollisions()` runs up to 5 iterations of bounding-box overlap detection, pushing overlapping nodes apart along the axis of least overlap. Seed node is pinned and never moved. Node sizes vary by importance scale.
 
 ### Edge Routing
 
@@ -328,24 +328,25 @@ Higher-order nodes are positioned relative to their parent:
 
 ## Interactive Node System
 
-### Radial Menu
+### Action Toolbar
 
-Clicking any consequence node toggles `activeNodeId`, which renders a floating `RadialMenu` with 4 buttons positioned at compass points around the node:
+Clicking any consequence node toggles `activeNodeId`, which renders a floating `ActionToolbar` below the node. The toolbar is split into two grouped containers:
 
-| Position | Button | Action |
-|---|---|---|
-| Top | Edit (pencil) | Opens `EditModeView` inline form |
-| Right | Add Child (plus) | Creates blank child `Consequence`, opens inline edit |
-| Bottom | AI Generate (sparkles) | Calls `generateChildConsequencesWithAI()`, shows placeholder skeletons |
-| Left | Delete (trash) | Confirmation dialog, removes node + direct children |
+| Group | Button | Color | Action |
+|---|---|---|---|
+| Management (left) | Edit (pencil) | Blue | Opens `EditModeView` inline form |
+| Management (left) | Delete (trash) | Red | Confirmation dialog with branch count, removes node + all descendants |
+| Creation (right) | Add Child (plus) | Green | Creates blank child `Consequence`, opens inline edit |
+| Creation (right) | AI Expand (sparkles) | Purple | Calls `generateChildConsequencesWithAI()`, shows placeholder skeletons |
+| Creation (right) | Ideas (lightbulb) | Amber | Calls `generateSolutionIdeas()`, generates 2 idea/solution children |
 
-The radial menu is **disabled during comprehensive generation** (`isGenerationRunning` flag) to prevent conflicts.
+Buttons are 56x56px (`w-14 h-14`) with `w-6 h-6` icons, staggered spring pop-in animation, and hover tooltips. The toolbar is **disabled during comprehensive generation** (`isGenerationRunning` flag) to prevent conflicts.
 
-### Seed Radial Menu
+### Seed Action Toolbar
 
-The seed node has its own `SeedRadialMenu` with 2 buttons:
-- **Top**: Add Child (manual)
-- **Bottom**: AI Generate Children (generates ~20 first-order consequences)
+The seed node has its own toolbar with 2 buttons:
+- **Add Child** (green): Creates a blank order-1 child in inline edit mode
+- **AI Generate** (purple): Creates 20 placeholder nodes, then replaces them with AI-generated first-order consequences
 
 ### Inline Editing (`EditModeView`)
 
@@ -379,6 +380,22 @@ The input is sent to `freePromptExpand()`, which builds a compact map summary (u
 
 New nodes receive an `expandedAt` timestamp and get a gold glow animation (`newly-expanded-glow`) that can be toggled via the sparkle button in the prompt bar.
 
+### Focus-Path Animation
+
+When a non-seed consequence node is selected, the graph performs a **focus-path animation**:
+
+1. **Pre-focus snapshot**: Current positions of all nodes are saved to `preFocusPositionsRef`.
+2. **Focus layout**: `computeFocusPositions()` (in `layout.ts`) straightens the ancestor chain into a radial beam from seed toward the selected node. Chain nodes keep their radial distance but rotate onto the beam angle. Non-chain nodes stay put unless they overlap a chain node, in which case they are gently nudged away.
+3. **CSS transition**: A `focus-animating` class enables 400ms `transition: transform` on all `.react-flow__node` elements, producing a smooth animation as positions update.
+4. **Auto-center**: After a 50ms delay, `centerOnNode()` pans the viewport toward the selected node, blending 60% selected-node position with 40% ancestor-chain centroid. Viewport clamping ensures the node stays fully visible with margin.
+5. **Unfocus**: When the node is deselected, saved positions are restored with a 300ms `unfocus-animating` transition, and the snapshot is cleared.
+
+Focus-path is **skipped during generation** to avoid conflicts with rapidly changing node sets.
+
+### Auto-fitView on Node Addition
+
+When `syncGraphStructure()` detects new nodes (via `addedIds`), it triggers `reactFlowInstance.fitView()` after a 100ms delay, ensuring the viewport expands to show all newly added nodes.
+
 ---
 
 ## Export System
@@ -406,16 +423,19 @@ The InputForm has a hidden file input that accepts `.json` files. It validates t
 
 ## Highlight / Filter System
 
-The sidebar provides **highlight filters** that DIM (not hide) non-matching nodes. All nodes remain visible at all times.
+The **on-map filter panel** (right side of the ReactFlow canvas, collapsible) provides **highlight filters** that DIM (not hide) non-matching nodes. All nodes remain visible at all times. The panel uses a vertical list layout with full labels and per-filter node counts.
 
 Filter dimensions:
-- **STEEPE categories** (6 toggles with category colors)
-- **Sentiment** (positive/negative/neutral + Ideas toggle for solution/idea nodes)
-- **Order** (1-5, only shows orders that have nodes)
-- **Probability** (probable/plausible/possible/wildcard)
-- **Importance** (critical/high/medium/low)
+- **STEEPE categories** (6 full-label buttons with category colors and counts)
+- **Sentiment** (positive/negative/neutral with icons and counts)
+- **Order** (1-5 with ordinal labels, only shows orders that have nodes, with counts)
+- **Probability** (probable/plausible/possible/wildcard with counts)
+- **Importance** (critical/high/medium/low with counts)
+- **Ideas & Solutions** toggle (amber-styled, with count)
 
 **Key Only** button: Quick filter to show only `probable` + `plausible` probability AND `critical` + `high` importance.
+
+**Collapsed state**: When collapsed (44px width), shows a vertical strip of icon buttons that expand the panel on click, plus a reset button.
 
 Dimmed nodes get `opacity: 0.35`, `grayscale(50%)`, and their edges get `opacity: 0.2`.
 
@@ -475,7 +495,9 @@ docker compose up --build
 | `buildFifthOrderPrompt()` | `prompts.ts` | Same as above. |
 | `App.css` | `src/App.css` | Vite boilerplate CSS (logo spin, card, read-the-docs). Not imported by any component. |
 | `ApiKeyInput` component | `components/ApiKeyInput.tsx` | Exists for manual key entry UI but may not be wired into the current flow if backend proxy is active. |
-| `FilterPanel` component | `components/FilterPanel.tsx` | Standalone filter component; the highlight filters are now inline in `FuturescapeMap.tsx`. |
+| `DetailPanel` component | `components/DetailPanel.tsx` | Previously shown in the sidebar on node selection. Removed — node actions are now on the `ActionToolbar` directly on the graph. |
+| `AddNodeModal` component | — | Previously a modal dialog in the sidebar for manual node creation. Removed — manual nodes are added via the seed or node action toolbar's "Add Child" button. |
+| `FilterPanel` component | `components/FilterPanel.tsx` | Standalone filter component; the highlight filters are now an on-map right panel in `FuturescapeMap.tsx`. |
 | `GenerationProgress` component | `components/GenerationProgress.tsx` | Standalone progress component; progress UI is now inline in the sidebar. |
 | `providers.ts` direct mode | `api/providers.ts` | The `callProviderAPI()` function still works for direct DeepSeek calls, but in Docker deployments `backend.ts` is used instead. |
 
@@ -509,9 +531,9 @@ docker compose up --build
 
 **Decision**: All state lives in `useState` hooks within `App.tsx` and `FuturescapeMap.tsx`.
 
-**Why**: The app has a simple two-screen flow. The consequence array is the single source of truth, and all mutations happen through `setConsequences()`. React Flow manages its own node/edge state via `useNodesState` / `useEdgesState`, synced from consequences via `generateNodesAndEdges()`.
+**Why**: The app has a simple two-screen flow. The consequence array is the single source of truth, and all mutations happen through `setConsequences()`. React Flow manages its own node/edge state via `useNodesState` / `useEdgesState`, synced from consequences via `syncGraphStructure()` (structural changes) and `updateNodeDataOnly()` (UI state changes).
 
-**Trade-off**: `FuturescapeMap.tsx` is large (~1600 lines) because all state and handlers colocate. A refactor to extract state into a custom hook or context would reduce component size.
+**Trade-off**: `FuturescapeMap.tsx` is large (~1800 lines) because all state and handlers colocate. Layout computation has been extracted to `src/layout.ts` as pure functions.
 
 ### 5. Custom radial layout, not force-directed
 
@@ -519,7 +541,7 @@ docker compose up --build
 
 **Why**: Force-directed layouts (like d3-force) produce nondeterministic results and can cause visual "jitter" as nodes settle. The radial layout provides stable, predictable positioning where order = distance from center. Users can still drag nodes.
 
-**Trade-off**: The layout doesn't auto-avoid overlaps for dense maps. Nodes at the same order can overlap if there are many siblings.
+**Trade-off**: The layout includes a collision-nudge pass (`resolveCollisions()`) but O(N^2) pair comparisons may become slow at very large graph sizes.
 
 ### 6. Single-file output
 
@@ -537,10 +559,37 @@ docker compose up --build
 
 **Trade-off**: Monospace fonts are wider than proportional fonts, which means less text fits in the same space. Node widths are set accordingly (220px base).
 
-### 8. Radial menu over context menu
+### 8. Action toolbar over context menu
 
-**Decision**: Node interactions use a floating radial menu with 4 compass-positioned action buttons, animated with spring physics (`nodeActionAppear` keyframe).
+**Decision**: Node interactions use a floating horizontal action toolbar below the node, split into two grouped containers (management: Edit/Delete, creation: Add Child/AI Expand/Ideas), with 56x56px icon buttons animated with spring physics (`nodeActionAppear` keyframe).
 
-**Why**: More discoverable than right-click context menus. Visual and spatial -- users learn the positions (top=edit, right=add, bottom=AI, left=delete). The spring animation and tooltip labels make actions feel responsive and self-documenting.
+**Why**: More discoverable than right-click context menus. Logical grouping separates destructive actions from creative ones. The spring animation and tooltip labels make actions feel responsive and self-documenting.
 
-**Trade-off**: The radial menu requires more screen space around each node. It is disabled during generation to prevent conflicts.
+**Trade-off**: The toolbar requires vertical space below each node. It is disabled during generation to prevent conflicts.
+
+---
+
+## Performance Notes
+
+### Current Optimizations
+
+- **Split update paths**: `syncGraphStructure()` runs only when consequence IDs change (structural). `updateNodeDataOnly()` runs on UI state changes (click, filter, edit) and never touches positions.
+- **nodesRef**: A `useRef<Node[]>` mirrors `nodes` state to avoid closing over stale `nodes` in callbacks and prevent unnecessary re-renders.
+- **consequenceMap / parentMap**: `useMemo` maps rebuilt only when `consequences` changes, providing O(1) lookup for `getAncestorChain` and other lookups.
+- **Custom `areEqual` on ConsequenceNode**: `consequenceNodeAreEqual()` compares only rendering-relevant data fields (consequence, isSelected, isDimmed, etc.) and ignores callback function references, preventing unnecessary re-renders when callbacks are recreated.
+- **Single-pass stats**: The `stats` useMemo computes all filter counts (bySentiment, byOrder, byCategory, byProbability, byImportance, ideasCount) in a single loop over `consequences`.
+- **Edge identity preservation**: `updateNodeDataOnly()` compares each edge's current style/zIndex/animated against computed values and returns the same object reference if nothing changed, reducing ReactFlow internal diffing.
+- **Double-setNodes elimination**: When `activeNodeId` changes to a non-seed node, the focus-path effect handles both position updates and data updates in a single `setNodes` call. The data-only effect skips this case to avoid a redundant second pass.
+
+### Known Bottlenecks
+
+| # | Issue | Severity | Status |
+|---|---|---|---|
+| 1 | **New data object per node per setNodes** -- both `syncGraphStructure` and `updateNodeDataOnly` create a new `{...n, data: {...}}` for every node on every call, causing ReactFlow internal churn even when only one node actually changed. | HIGH | Trade-off. ReactFlow's `setNodes(prev => prev.map(...))` API requires returning new objects for changed nodes. A per-node shallow-equal check before spreading would reduce this but adds complexity. |
+| 2 | **CSS `transition: transform` on ALL nodes during focus animation** -- the `.focus-animating .react-flow__node` rule applies a 400ms transform transition to every node in the graph, even nodes that don't move. The browser must composite all nodes. | HIGH | Trade-off. Per-node transition classes would be more efficient but require ReactFlow DOM manipulation. The 400ms duration limits the window of impact. |
+| 3 | **O(N^2) collision resolution on every consequences change** -- `resolveCollisions()` compares every pair of nodes for bounding-box overlap, up to 5 iterations. For 100 nodes this is ~50K comparisons per call. | MEDIUM | Fixable at scale. Current graphs are <150 nodes and the function completes in <10ms. A quadtree or grid-based spatial hash would reduce to O(N log N) if needed. |
+| 4 | **8 Handle DOM elements per node** -- each `ConsequenceNode` renders 8 `<Handle>` elements (4 source + 4 target) for multi-directional edge routing. For 100 nodes this is 800 extra DOM elements. | MEDIUM | Inherent to the current edge routing approach. Reducing to 4 handles (source+target combined) would require changes to `getOptimalHandles`. |
+| 5 | **SVG drop-shadow filter on edge hover** -- edge hover styles include a `drop-shadow` glow effect via CSS, which triggers SVG filter recalculation on each hovered edge. | MEDIUM | Trade-off. The visual effect is desirable. Could be replaced with a wider stroke instead of a filter for better performance. |
+| 6 | **Placeholder add/remove triggers layout twice during AI generation** -- adding placeholder nodes triggers `syncGraphStructure`, then replacing them with real nodes triggers it again. Both calls run `computeRadialLayout` + `resolveCollisions`. | MEDIUM | Fixable. A batched update that removes placeholders and adds real nodes in the same `setConsequences` call would reduce to one layout pass. Currently this is already the case for individual node expansion but could be tighter. |
+| 7 | **box-shadow keyframe animation on newly-expanded nodes** -- the `newExpandGlow` CSS keyframe applies a pulsing amber box-shadow to nodes added via expansion. For many expanded nodes, this triggers continuous repaints. | LOW | Fixable. Could limit the animation duration or use `will-change: box-shadow` to promote to compositor layer. |
+| 8 | **backdrop-filter on toolbar overlays** -- the `ActionToolbar` containers use `backdrop-blur-sm` which triggers compositor layer creation and blur recalculation on scroll/zoom. | LOW | Fixable. Could replace with a solid semi-transparent background (`bg-white/95`) without the blur filter. |

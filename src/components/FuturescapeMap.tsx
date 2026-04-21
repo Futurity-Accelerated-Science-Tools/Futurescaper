@@ -9,6 +9,7 @@ import ReactFlow, {
   useEdgesState,
   ConnectionMode,
   MarkerType,
+  ReactFlowInstance,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 
@@ -32,9 +33,8 @@ import {
 import { generateComprehensiveFuturescape, hasApiKey, GenerationPhase } from '../api/claude';
 import { generateConsequences } from '../mockData';
 import { ConsequenceNode, SeedNode, ConsequenceNodeData } from './ConsequenceNode';
-import { DetailPanel } from './DetailPanel';
 import { ExportPanel } from './ExportPanel';
-import { ArrowLeft, AlertCircle, Lightbulb, FileText, Star, Target, Layers, TrendingUp, TrendingDown, Minus, Plus, Loader2, Expand, X, Send, Sparkles, Zap, Hammer, LayoutGrid, Filter, ChevronRight, ChevronLeft } from 'lucide-react';
+import { ArrowLeft, AlertCircle, Lightbulb, FileText, Star, Target, Layers, TrendingUp, TrendingDown, Minus, Loader2, X, Send, Sparkles, Zap, Hammer, LayoutGrid, Filter, ChevronRight, ChevronLeft } from 'lucide-react';
 import { expandNodeConsequences, freePromptExpand, generateSolutionIdeas, generateConsequencesWithAI, generateChildConsequencesWithAI } from '../api/claude';
 import { findRelevantSubjects, RelevantSubject } from '../api/subjects';
 import { RelatedSubjects } from './RelatedSubjects';
@@ -67,11 +67,9 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
   const [generationPhase, setGenerationPhase] = useState<ExtendedPhase>(importedData ? 'complete' : (manualMode ? 'complete' : 'idle'));
   const [progressMessage, setProgressMessage] = useState<string>('');
   const [isPaused, setIsPaused] = useState(false);
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [useMockData, setUseMockData] = useState(false);
   const [showTLDR, setShowTLDR] = useState(true);
-  const [showAddNodeModal, setShowAddNodeModal] = useState(false);
   const [isExpandingNode, setIsExpandingNode] = useState(false);
   const [isGeneratingIdeas, setIsGeneratingIdeas] = useState(false);
   const [promptText, setPromptText] = useState('');
@@ -109,11 +107,19 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
 
+  // ── Stable ref for current nodes (avoids closing over `nodes` in callbacks) ──
+  const nodesRef = useRef<Node[]>([]);
+  nodesRef.current = nodes;
+
   // ── Focus-path animation state ──
   const preFocusPositionsRef = useRef<Map<string, Position> | null>(null);
   const [focusAnimClass, setFocusAnimClass] = useState<string>('');
   const focusAnimTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevActiveNodeIdRef = useRef<string | null>(null);
+
+  // ── ReactFlow instance + container for programmatic viewport control ──
+  const reactFlowInstanceRef = useRef<ReactFlowInstance | null>(null);
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
 
   // Check if a consequence should be highlighted (not dimmed)
   const isHighlighted = useCallback((c: Consequence): boolean => {
@@ -128,49 +134,45 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     );
   }, [highlightFilters]);
 
+  // ── O(1) lookup maps, rebuilt only when consequences change ──
+  const consequenceMap = useMemo(() => {
+    const m = new Map<string, Consequence>();
+    for (const c of consequences) m.set(c.id, c);
+    return m;
+  }, [consequences]);
+
+  const parentMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of consequences) {
+      if (c.parentId) m.set(c.id, c.parentId);
+    }
+    return m;
+  }, [consequences]);
+
   // All consequences are shown, but some may be dimmed
   const filteredConsequences = useMemo(() => {
     return consequences; // Show all, dimming handled in node rendering
   }, [consequences]);
 
-  // Stats
+  // Stats — single-pass reduce over consequences
   const stats = useMemo(() => {
-    const bySentiment = {
-      positive: consequences.filter(c => c.sentiment === 'positive').length,
-      negative: consequences.filter(c => c.sentiment === 'negative').length,
-      neutral: consequences.filter(c => c.sentiment === 'neutral').length,
-    };
-    const byOrder = {
-      1: consequences.filter(c => c.order === 1).length,
-      2: consequences.filter(c => c.order === 2).length,
-      3: consequences.filter(c => c.order === 3).length,
-      4: consequences.filter(c => c.order === 4).length,
-      5: consequences.filter(c => c.order === 5).length,
-    };
-    const byCategory: Record<string, number> = {
-      social: consequences.filter(c => c.category === 'social').length,
-      technological: consequences.filter(c => c.category === 'technological').length,
-      economic: consequences.filter(c => c.category === 'economic').length,
-      environmental: consequences.filter(c => c.category === 'environmental').length,
-      political: consequences.filter(c => c.category === 'political').length,
-      ethical: consequences.filter(c => c.category === 'ethical').length,
-    };
-    const byProbability: Record<string, number> = {
-      probable: consequences.filter(c => c.probability === 'probable').length,
-      plausible: consequences.filter(c => c.probability === 'plausible').length,
-      possible: consequences.filter(c => c.probability === 'possible').length,
-      wildcard: consequences.filter(c => c.probability === 'wildcard').length,
-    };
-    const byImportance: Record<string, number> = {
-      critical: consequences.filter(c => c.importance === 'critical').length,
-      high: consequences.filter(c => c.importance === 'high').length,
-      medium: consequences.filter(c => c.importance === 'medium').length,
-      low: consequences.filter(c => c.importance === 'low').length,
-    };
-    const ideasCount = consequences.filter(c => c.nodeType === 'solution' || c.nodeType === 'idea').length;
-    const criticalCount = byImportance.critical;
-    const highCount = byImportance.high;
-    return { bySentiment, byOrder, byCategory, byProbability, byImportance, ideasCount, criticalCount, highCount, total: consequences.length };
+    const bySentiment = { positive: 0, negative: 0, neutral: 0 };
+    const byOrder: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    const byCategory: Record<string, number> = { social: 0, technological: 0, economic: 0, environmental: 0, political: 0, ethical: 0 };
+    const byProbability: Record<string, number> = { probable: 0, plausible: 0, possible: 0, wildcard: 0 };
+    const byImportance: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0 };
+    let ideasCount = 0;
+
+    for (const c of consequences) {
+      if (c.sentiment in bySentiment) (bySentiment as any)[c.sentiment]++;
+      if (c.order in byOrder) byOrder[c.order]++;
+      if (c.category in byCategory) byCategory[c.category]++;
+      if (c.probability && c.probability in byProbability) byProbability[c.probability]++;
+      if (c.importance && c.importance in byImportance) byImportance[c.importance]++;
+      if (c.nodeType === 'solution' || c.nodeType === 'idea') ideasCount++;
+    }
+
+    return { bySentiment, byOrder, byCategory, byProbability, byImportance, ideasCount, criticalCount: byImportance.critical, highCount: byImportance.high, total: consequences.length };
   }, [consequences]);
 
   // Generate TLDR summary
@@ -222,7 +224,6 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
   const handleNodeClick = useCallback((id: string) => {
     setActiveNodeId(prev => prev === id ? null : id);
     setEditingNodeId(null);
-    setSelectedNodeId(id); // Also select for DetailPanel
   }, []);
 
   const handleStartEdit = useCallback((id: string) => {
@@ -243,7 +244,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
 
   const handleCancelEdit = useCallback((id: string) => {
     // If this was a new blank node with no text, remove it
-    const node = consequences.find(c => c.id === id);
+    const node = consequenceMap.get(id);
     if (node && !node.text.trim()) {
       setConsequences(prev => prev.filter(c => c.id !== id));
     }
@@ -304,7 +305,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
   }, [input]);
 
   const handleAddChild = useCallback((parentId: string) => {
-    const parent = consequences.find(c => c.id === parentId);
+    const parent = consequenceMap.get(parentId);
     const newOrder = parent ? (Math.min(parent.order + 1, 5) as ConsequenceOrder) : 1;
     const newId = `manual-${Date.now()}`;
     const newConsequence: Consequence = {
@@ -324,7 +325,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
   }, [consequences]);
 
   const handleGenerateChildren = useCallback(async (parentId: string) => {
-    const parent = consequences.find(c => c.id === parentId);
+    const parent = consequenceMap.get(parentId);
     if (!parent) return;
 
     setIsGeneratingChildrenFor(parentId);
@@ -363,7 +364,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
   }, [consequences, input]);
 
   const handleRadialGenerateIdeas = useCallback(async (nodeId: string) => {
-    const targetNode = consequences.find(c => c.id === nodeId);
+    const targetNode = consequenceMap.get(nodeId);
     if (!targetNode) return;
 
     setIsGeneratingIdeasFor(nodeId);
@@ -429,7 +430,6 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     const idsToRemove = new Set([id, ...descendantIds]);
     setConsequences(prev => prev.filter(c => !idsToRemove.has(c.id)));
     setActiveNodeId(null);
-    setSelectedNodeId(null);
   }, [consequences]);
 
   const handlePaneClick = useCallback(() => {
@@ -444,14 +444,96 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     chain.add(nodeId);
     let currentId: string | undefined = nodeId;
     while (currentId && currentId !== 'seed') {
-      const node = consequences.find(c => c.id === currentId);
-      if (!node || !node.parentId) break;
-      chain.add(node.parentId);
-      currentId = node.parentId;
+      const pid = parentMap.get(currentId);
+      if (!pid) break;
+      chain.add(pid);
+      currentId = pid;
     }
     chain.add('seed');
     return chain;
-  }, [consequences]);
+  }, [parentMap]);
+
+  // ── Center viewport on a node, biased toward its ancestor chain ──
+  // Guarantees the selected node is fully visible with margin.
+  // `positionOverrides` lets callers pass known-good positions (e.g. just-computed
+  // focus positions) instead of relying on ReactFlow state which may be stale.
+  const centerOnNode = useCallback((
+    nodeId: string,
+    zoom?: number,
+    positionOverrides?: Map<string, Position>,
+  ) => {
+    const rf = reactFlowInstanceRef.current;
+    if (!rf) return;
+
+    const z = zoom ?? 0.8;
+
+    // Resolve position: prefer overrides, fall back to RF state
+    const resolvePos = (id: string) => {
+      if (positionOverrides?.has(id)) return positionOverrides.get(id)!;
+      const n = rf.getNode(id);
+      return n ? n.position : null;
+    };
+    const resolveSize = (id: string) => {
+      const n = rf.getNode(id);
+      return { w: n?.width ?? 200, h: n?.height ?? 80 };
+    };
+
+    const nodePos = resolvePos(nodeId);
+    if (!nodePos) return;
+    const { w: nw, h: nh } = resolveSize(nodeId);
+    const selectedCenterX = nodePos.x + nw / 2;
+    const selectedCenterY = nodePos.y + nh / 2;
+
+    // Walk the ancestor chain and compute the centroid of chain node centers
+    const chain = getAncestorChain(nodeId);
+    let sumX = 0, sumY = 0, count = 0;
+    chain.forEach(id => {
+      const pos = resolvePos(id);
+      if (pos) {
+        const { w, h } = resolveSize(id);
+        sumX += pos.x + w / 2;
+        sumY += pos.y + h / 2;
+        count++;
+      }
+    });
+
+    // Blend: 60% selected node, 40% chain centroid — biases toward parents
+    let targetX = selectedCenterX;
+    let targetY = selectedCenterY;
+    if (count > 1) {
+      const chainCenterX = sumX / count;
+      const chainCenterY = sumY / count;
+      targetX = selectedCenterX * 0.6 + chainCenterX * 0.4;
+      targetY = selectedCenterY * 0.6 + chainCenterY * 0.4;
+    }
+
+    // Clamp: ensure the selected node is fully inside the viewport with margin.
+    // At zoom z, the viewport shows (containerWidth/z) x (containerHeight/z) world units.
+    // Try multiple ways to find the container element
+    const container = mapContainerRef.current
+      ?? ((rf as any).domNode as HTMLDivElement | null);
+    if (container) {
+      const vpHalfW = container.clientWidth / z / 2;
+      const vpHalfH = container.clientHeight / z / 2;
+      const margin = 80; // world-space pixels of padding around node edge
+
+      // Node edges in world space
+      const nodeLeft = nodePos.x - margin;
+      const nodeRight = nodePos.x + nw + margin;
+      const nodeTop = nodePos.y - margin;
+      const nodeBottom = nodePos.y + nh + margin;
+
+      // Viewport shows [targetX - vpHalfW, targetX + vpHalfW]
+      // Ensure nodeLeft >= targetX - vpHalfW  →  targetX <= nodeLeft + vpHalfW
+      // Ensure nodeRight <= targetX + vpHalfW →  targetX >= nodeRight - vpHalfW
+      targetX = Math.min(targetX, nodeLeft + vpHalfW);
+      targetX = Math.max(targetX, nodeRight - vpHalfW);
+      targetY = Math.min(targetY, nodeTop + vpHalfH);
+      targetY = Math.max(targetY, nodeBottom - vpHalfH);
+    }
+
+    rf.setCenter(targetX, targetY, { zoom: z, duration: 500 });
+  }, [getAncestorChain]);
 
   // ─── Build edges from current node positions ────────────────────
   const buildEdges = useCallback((
@@ -545,9 +627,9 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     const currentIds = new Set(consequences.map(c => c.id));
     const prevIds = prevConsequenceIdsRef.current;
 
-    // Read current positions from ReactFlow's node state
+    // Read current positions from ReactFlow's node state (via ref to avoid dep on nodes)
     const existingPositions = new Map<string, Position>();
-    for (const n of nodes) {
+    for (const n of nodesRef.current) {
       existingPositions.set(n.id, n.position);
     }
 
@@ -587,7 +669,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
             },
           };
         }
-        const c = consequences.find(con => con.id === n.id);
+        const c = consequenceMap.get(n.id);
         if (!c) return n;
         return {
           ...n,
@@ -645,7 +727,14 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
 
     setEdges(buildEdges(consequences, allPositions));
     prevConsequenceIdsRef.current = currentIds;
-  }, [consequences, nodes, input, activeNodeId, editingNodeId,
+
+    // If new nodes were added, zoom to fit all nodes after a short delay
+    if (addedIds.size > 0) {
+      setTimeout(() => {
+        reactFlowInstanceRef.current?.fitView({ padding: 0.2, duration: 400 });
+      }, 100);
+    }
+  }, [consequences, consequenceMap, input, activeNodeId, editingNodeId,
       isGeneratingChildrenFor, isGenerationRunning, getAncestorChain,
       handleSeedClick, handleSeedAddChild, handleSeedGenerateChildren,
       buildConsequenceData, buildEdges, setNodes, setEdges]);
@@ -673,7 +762,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
           },
         };
       }
-      const c = consequences.find(con => con.id === n.id);
+      const c = consequenceMap.get(n.id);
       if (!c) return n;
       return {
         ...n,
@@ -684,30 +773,54 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     }));
 
     // Also update edge styling (dimming, animation, z-index)
+    // Build a quick edge-id → consequence lookup to avoid O(N) find per edge
+    const edgeToConsequence = new Map<string, Consequence>();
+    for (const c of consequences) {
+      edgeToConsequence.set(`edge-${c.parentId || 'seed'}-${c.id}`, c);
+    }
+    const phaseMap: Record<number, ExtendedPhase> = {
+      1: 'first-order', 2: 'second-order', 3: 'third-order', 4: 'complete', 5: 'complete',
+    };
+
     setEdges(prev => {
       return prev.map(edge => {
-        const c = consequences.find(con => `edge-${con.parentId || 'seed'}-${con.id}` === edge.id);
+        const c = edgeToConsequence.get(edge.id);
         if (!c) return edge;
         const isDimmed = !isHighlighted(c);
         const isWildcard = c.probability === 'wildcard';
         const isSolOrIdea = c.nodeType === 'solution' || c.nodeType === 'idea';
         const edgeColor = isSolOrIdea ? SOLUTION_COLORS.border : isWildcard ? '#8b5cf6' : getSentimentColors(c.sentiment).border;
-        const phaseMap: Record<number, ExtendedPhase> = {
-          1: 'first-order', 2: 'second-order', 3: 'third-order', 4: 'complete', 5: 'complete',
-        };
         // Elevate edges whose both endpoints are in the ancestor chain
         const parentId = c.parentId || 'seed';
         const isElevated = hasElevation && elevatedNodes.has(parentId) && elevatedNodes.has(c.id);
+        const newZIndex = isElevated ? 999 : undefined;
+        const newStrokeWidth = isDimmed ? 1 : (isElevated ? 3 : 2);
+        const newOpacity = isDimmed ? 0.2 : (c.order === 1 ? 0.7 : 0.6);
+        const newAnimated = generationPhase === phaseMap[c.order];
+        const newDash = isSolOrIdea ? '8,4' : isWildcard ? '5,5' : undefined;
+
+        // Skip update if nothing changed (preserve reference identity)
+        if (
+          edge.zIndex === newZIndex &&
+          edge.animated === newAnimated &&
+          edge.style?.stroke === edgeColor &&
+          edge.style?.strokeWidth === newStrokeWidth &&
+          edge.style?.opacity === newOpacity &&
+          edge.style?.strokeDasharray === newDash
+        ) {
+          return edge;
+        }
+
         return {
           ...edge,
-          zIndex: isElevated ? 999 : undefined,
+          zIndex: newZIndex,
           style: {
             stroke: edgeColor,
-            strokeWidth: isDimmed ? 1 : (isElevated ? 3 : 2),
-            strokeDasharray: isSolOrIdea ? '8,4' : isWildcard ? '5,5' : undefined,
-            opacity: isDimmed ? 0.2 : (c.order === 1 ? 0.7 : 0.6),
+            strokeWidth: newStrokeWidth,
+            strokeDasharray: newDash,
+            opacity: newOpacity,
           },
-          animated: generationPhase === phaseMap[c.order],
+          animated: newAnimated,
         };
       });
     });
@@ -732,15 +845,15 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       // Find the positions of both ends
       const sourcePos = edge.source === draggedNode.id
         ? draggedNode.position
-        : (nodes.find(n => n.id === edge.source)?.position || { x: 0, y: 0 });
+        : (nodesRef.current.find(n => n.id === edge.source)?.position || { x: 0, y: 0 });
       const targetPos = edge.target === draggedNode.id
         ? draggedNode.position
-        : (nodes.find(n => n.id === edge.target)?.position || { x: 0, y: 0 });
+        : (nodesRef.current.find(n => n.id === edge.target)?.position || { x: 0, y: 0 });
 
       const { sourceHandle, targetHandle } = getOptimalHandles(sourcePos, targetPos);
       return { ...edge, sourceHandle, targetHandle };
     }));
-  }, [nodes, setEdges]);
+  }, [setEdges]);
 
   // ─── Tidy Layout handler ───────────────────────────────────────
   const handleTidyLayout = useCallback(() => {
@@ -774,11 +887,37 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
   }, [consequences, syncGraphStructure]);
 
   // ─── Effect: data-only update (when UI state changes) ──────────
+  // Skip when activeNodeId just changed (non-seed, non-generation) because
+  // the focus-path effect below will handle setNodes/setEdges for that case,
+  // avoiding a redundant double-update.
+  const prevActiveForDataRef = useRef<string | null>(null);
   useEffect(() => {
+    const activeChanged = activeNodeId !== prevActiveForDataRef.current;
+    const prevWasFocused = prevActiveForDataRef.current && prevActiveForDataRef.current !== 'seed';
+    prevActiveForDataRef.current = activeNodeId;
+    // When focusing a non-seed node, the focus-path effect handles setNodes/setEdges.
+    // When unfocusing (from a focused node), the focus-path effect also handles it.
+    // Skip here to avoid a redundant double-update.
+    if (activeChanged && !isGenerationRunning && (
+      (activeNodeId && activeNodeId !== 'seed') || prevWasFocused
+    )) {
+      return;
+    }
     updateNodeDataOnly();
   }, [activeNodeId, editingNodeId, isGeneratingChildrenFor, isGeneratingIdeasFor,
       isGenerationRunning, generationPhase, highlightFilters,
       showNewHighlight, lastExpansionTime, updateNodeDataOnly]);
+
+  // ─── Effect: center viewport when editing starts ────
+  const prevEditingRef = useRef<string | null>(null);
+  useEffect(() => {
+    const editChanged = editingNodeId !== prevEditingRef.current;
+    prevEditingRef.current = editingNodeId;
+    if (editChanged && editingNodeId) {
+      // Small delay so the enlarged edit form has rendered and RF has measured it
+      setTimeout(() => centerOnNode(editingNodeId, 0.7), 80);
+    }
+  }, [editingNodeId, centerOnNode]);
 
   // ─── Effect: focus-path animation (when active node changes) ────
   useEffect(() => {
@@ -801,7 +940,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       // Save current positions before focus (only if not already saved)
       if (!preFocusPositionsRef.current) {
         const savedPositions = new Map<string, Position>();
-        for (const n of nodes) {
+        for (const n of nodesRef.current) {
           savedPositions.set(n.id, { ...n.position });
         }
         preFocusPositionsRef.current = savedPositions;
@@ -812,7 +951,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       // so switching between focused nodes uses stable original positions
       const basePositions = preFocusPositionsRef.current || new Map<string, Position>();
       // Fall back to current positions for any nodes not in the saved set (e.g. newly added)
-      for (const n of nodes) {
+      for (const n of nodesRef.current) {
         if (!basePositions.has(n.id)) {
           basePositions.set(n.id, { ...n.position });
         }
@@ -820,22 +959,45 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
 
       const focusPos = computeFocusPositions(activeNodeId, ancestorChain, consequences, basePositions);
 
-      // Enable CSS transition, then apply positions + focus dimming
+      // Enable CSS transition, then apply positions + focus dimming + data update
+      // (We also apply the full data update here to avoid a redundant updateNodeDataOnly call)
       setFocusAnimClass('focus-animating');
       requestAnimationFrame(() => {
         setNodes(prev => prev.map(n => {
           const pos = focusPos.get(n.id);
           const isInChain = ancestorChain.has(n.id);
           const updatedNode = pos ? { ...n, position: pos } : { ...n };
-          // Set isFocusDimmed on non-chain consequence nodes
-          if (n.type === 'consequence' && n.data) {
-            updatedNode.data = { ...n.data, isFocusDimmed: !isInChain };
+          // Apply z-index for chain elevation
+          updatedNode.zIndex = ancestorChain.has(n.id)
+            ? (activeNodeId === n.id ? 1001 : 1000) : undefined;
+          // Update consequence node data (selection state, dimming, callbacks)
+          if (n.type === 'consequence') {
+            const c = consequenceMap.get(n.id);
+            if (c) {
+              updatedNode.draggable = !c.id.startsWith('placeholder-') && editingNodeId !== c.id;
+              updatedNode.data = { ...buildConsequenceData(c), isFocusDimmed: !isInChain };
+            }
+          } else if (n.id === 'seed') {
+            updatedNode.data = {
+              title: input.title,
+              description: input.description,
+              isSelected: activeNodeId === 'seed',
+              isGeneratingChildren: isGeneratingChildrenFor === 'seed',
+              isGenerationInProgress: isGenerationRunning,
+              onClick: handleSeedClick,
+              onAddChild: handleSeedAddChild,
+              onGenerateChildren: handleSeedGenerateChildren,
+            };
           }
           return updatedNode;
         }));
         // Rebuild edges for new positions
         setEdges(buildEdges(consequences, focusPos));
       });
+
+      // Center viewport on selected node using the just-computed positions
+      // (RF state may not have updated yet, so pass focusPos directly)
+      setTimeout(() => centerOnNode(activeNodeId, 0.8, focusPos), 50);
 
       // Remove transition class after animation completes
       focusAnimTimerRef.current = setTimeout(() => {
@@ -847,15 +1009,30 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       // ── UNFOCUS: deselected → restore pre-focus positions ──
       const savedPositions = preFocusPositionsRef.current;
 
-      // Enable unfocus transition, then restore positions + clear dimming
+      // Enable unfocus transition, then restore positions + clear dimming + update data
       setFocusAnimClass('unfocus-animating');
       requestAnimationFrame(() => {
         setNodes(prev => prev.map(n => {
           const pos = savedPositions.get(n.id);
           const updatedNode = pos ? { ...n, position: pos } : { ...n };
-          // Clear isFocusDimmed on all consequence nodes
-          if (n.type === 'consequence' && n.data) {
-            updatedNode.data = { ...n.data, isFocusDimmed: false };
+          updatedNode.zIndex = undefined; // Clear elevation
+          if (n.type === 'consequence') {
+            const c = consequenceMap.get(n.id);
+            if (c) {
+              updatedNode.draggable = !c.id.startsWith('placeholder-') && editingNodeId !== c.id;
+              updatedNode.data = { ...buildConsequenceData(c), isFocusDimmed: false };
+            }
+          } else if (n.id === 'seed') {
+            updatedNode.data = {
+              title: input.title,
+              description: input.description,
+              isSelected: activeNodeId === 'seed',
+              isGeneratingChildren: isGeneratingChildrenFor === 'seed',
+              isGenerationInProgress: isGenerationRunning,
+              onClick: handleSeedClick,
+              onAddChild: handleSeedAddChild,
+              onGenerateChildren: handleSeedGenerateChildren,
+            };
           }
           return updatedNode;
         }));
@@ -1060,12 +1237,11 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
 
   const handleDelete = (id: string) => {
     setConsequences((prev) => prev.filter((c) => c.id !== id));
-    setSelectedNodeId(null);
   };
 
   // Expand node - generate 2-4 more consequences from a selected node
   const handleExpandNode = async (nodeId: string) => {
-    const nodeToExpand = consequences.find(c => c.id === nodeId);
+    const nodeToExpand = consequenceMap.get(nodeId);
     if (!nodeToExpand) return;
 
     setIsExpandingNode(true);
@@ -1089,7 +1265,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
 
   // Generate solutions/ideas for a consequence
   const handleGenerateIdeas = async (nodeId: string) => {
-    const targetNode = consequences.find(c => c.id === nodeId);
+    const targetNode = consequenceMap.get(nodeId);
     if (!targetNode) return;
 
     setIsGeneratingIdeas(true);
@@ -1105,32 +1281,6 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       setError((err as Error).message);
     }
     setIsGeneratingIdeas(false);
-  };
-
-  // Add manual node
-  const handleAddManualNode = (nodeData: {
-    text: string;
-    category: STEEPCategory;
-    sentiment: Sentiment;
-    parentId?: string;
-  }) => {
-    const parentNode = nodeData.parentId ? consequences.find(c => c.id === nodeData.parentId) : null;
-    const newOrder: ConsequenceOrder = parentNode ? (Math.min(parentNode.order + 1, 5) as ConsequenceOrder) : 1;
-
-    const newConsequence: Consequence = {
-      id: `manual-${Date.now()}`,
-      text: nodeData.text,
-      category: nodeData.category,
-      sentiment: nodeData.sentiment,
-      order: newOrder,
-      parentId: nodeData.parentId || 'seed',
-      probability: 'plausible',
-      importance: 'medium',
-      isManual: true,
-    };
-
-    setConsequences(prev => [...prev, newConsequence]);
-    setShowAddNodeModal(false);
   };
 
   // Free-prompt expansion handler
@@ -1161,8 +1311,6 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     setIsPrompting(false);
   };
 
-  const selectedConsequence = consequences.find((c) => c.id === selectedNodeId);
-
   // Get phase progress (now only 4 phases: 3 orders + solutions)
   const getPhaseNumber = (phase: ExtendedPhase): number => {
     const phases: ExtendedPhase[] = ['first-order', 'second-order', 'third-order', 'solutions', 'complete'];
@@ -1184,17 +1332,6 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
           </button>
           <h2 className="font-bold text-slate-900 mb-1">{input.title}</h2>
           <p className="text-sm text-slate-600 max-h-32 overflow-y-auto">{input.description}</p>
-
-          {/* Add Manual Node Button */}
-          {generationPhase === 'complete' && (
-            <button
-              onClick={() => setShowAddNodeModal(true)}
-              className="mt-3 w-full flex items-center justify-center gap-2 py-2 text-sm font-medium text-seed border border-seed rounded-lg hover:bg-seed hover:text-white transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              Add Manual Node
-            </button>
-          )}
         </div>
 
         {error && (
@@ -1300,7 +1437,11 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
                     </h4>
                     <ul className="space-y-2">
                       {tldrSummary.topConcerns.map((c) => (
-                        <li key={c.id} className="text-xs text-slate-600 pl-3 border-l-2 border-red-200 leading-relaxed">
+                        <li
+                          key={c.id}
+                          onClick={() => setActiveNodeId(c.id)}
+                          className="text-xs text-slate-600 pl-3 border-l-2 border-red-200 leading-relaxed cursor-pointer hover:text-slate-900 hover:border-red-400 transition-colors"
+                        >
                           {c.text}
                         </li>
                       ))}
@@ -1315,7 +1456,11 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
                     </h4>
                     <ul className="space-y-2">
                       {tldrSummary.topOpportunities.map((c) => (
-                        <li key={c.id} className="text-xs text-slate-600 pl-3 border-l-2 border-green-200 leading-relaxed">
+                        <li
+                          key={c.id}
+                          onClick={() => setActiveNodeId(c.id)}
+                          className="text-xs text-slate-600 pl-3 border-l-2 border-green-200 leading-relaxed cursor-pointer hover:text-slate-900 hover:border-green-400 transition-colors"
+                        >
                           {c.text}
                         </li>
                       ))}
@@ -1334,25 +1479,11 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
           onRetry={handleRetrySubjects}
         />
 
-        {selectedConsequence && (
-          <DetailPanel
-            consequence={selectedConsequence}
-            allConsequences={consequences}
-            onClose={() => setSelectedNodeId(null)}
-            onEdit={handleEdit}
-            onDelete={handleDelete}
-            onExpand={handleExpandNode}
-            onGenerateIdeas={handleGenerateIdeas}
-            isExpanding={isExpandingNode}
-            isGeneratingIdeas={isGeneratingIdeas}
-          />
-        )}
-
         <ExportPanel consequences={consequences} input={input} solutions={[]} />
       </div>
 
       {/* Main map area */}
-      <div className={`flex-1 relative ${focusAnimClass} ${activeNodeId && activeNodeId !== 'seed' ? 'has-focus-path' : ''}`}>
+      <div ref={mapContainerRef} className={`flex-1 relative ${focusAnimClass} ${activeNodeId && activeNodeId !== 'seed' ? 'has-focus-path' : ''}`}>
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -1362,6 +1493,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
           connectionMode={ConnectionMode.Loose}
           onPaneClick={handlePaneClick}
           onNodeDragStop={handleNodeDragStop}
+          onInit={(instance) => { reactFlowInstanceRef.current = instance; }}
           fitView
           fitViewOptions={{ padding: 0.2 }}
           minZoom={0.1}
@@ -1703,173 +1835,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
         )}
       </div>
 
-      {/* Add Manual Node Modal */}
-      {showAddNodeModal && (
-        <AddNodeModal
-          onClose={() => setShowAddNodeModal(false)}
-          onAdd={handleAddManualNode}
-          consequences={consequences}
-        />
-      )}
     </div>
   );
 }
 
-// Add Node Modal Component
-function AddNodeModal({
-  onClose,
-  onAdd,
-  consequences,
-}: {
-  onClose: () => void;
-  onAdd: (data: { text: string; category: STEEPCategory; sentiment: Sentiment; parentId?: string }) => void;
-  consequences: Consequence[];
-}) {
-  const [text, setText] = React.useState('');
-  const [category, setCategory] = React.useState<STEEPCategory>('social');
-  const [sentiment, setSentiment] = React.useState<Sentiment>('neutral');
-  const [parentId, setParentId] = React.useState<string>('seed');
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (text.trim()) {
-      onAdd({
-        text: text.trim(),
-        category,
-        sentiment,
-        parentId: parentId === 'seed' ? undefined : parentId,
-      });
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md mx-4">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-bold text-slate-900">Add Manual Node</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Consequence Text */}
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">
-              Consequence Description
-            </label>
-            <textarea
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-seed focus:border-seed"
-              rows={3}
-              placeholder="Describe the consequence..."
-              required
-            />
-          </div>
-
-          {/* Parent Node */}
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">
-              Flows From (Parent)
-            </label>
-            <select
-              value={parentId}
-              onChange={(e) => setParentId(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-seed focus:border-seed"
-            >
-              <option value="seed">🌱 Seed (Main Scenario)</option>
-              {consequences.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.order}° - {c.text.slice(0, 50)}...
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Category */}
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">
-              STEEP Category
-            </label>
-            <div className="grid grid-cols-5 gap-2">
-              {(['social', 'technological', 'economic', 'environmental', 'political', 'ethical'] as STEEPCategory[]).map((cat) => (
-                <button
-                  key={cat}
-                  type="button"
-                  onClick={() => setCategory(cat)}
-                  className={`px-2 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
-                    category === cat
-                      ? 'border-seed bg-seed text-white'
-                      : 'border-slate-300 hover:border-seed hover:text-seed'
-                  }`}
-                >
-                  {cat.slice(0, 4).toUpperCase()}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Sentiment */}
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">
-              Sentiment
-            </label>
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => setSentiment('positive')}
-                className={`px-3 py-2 text-sm font-medium rounded-lg border transition-colors flex items-center justify-center gap-1 ${
-                  sentiment === 'positive'
-                    ? 'border-green-500 bg-green-50 text-green-700'
-                    : 'border-slate-300 hover:border-green-500'
-                }`}
-              >
-                <TrendingUp className="w-4 h-4" /> Positive
-              </button>
-              <button
-                type="button"
-                onClick={() => setSentiment('neutral')}
-                className={`px-3 py-2 text-sm font-medium rounded-lg border transition-colors flex items-center justify-center gap-1 ${
-                  sentiment === 'neutral'
-                    ? 'border-amber-500 bg-amber-50 text-amber-700'
-                    : 'border-slate-300 hover:border-amber-500'
-                }`}
-              >
-                <Minus className="w-4 h-4" /> Neutral
-              </button>
-              <button
-                type="button"
-                onClick={() => setSentiment('negative')}
-                className={`px-3 py-2 text-sm font-medium rounded-lg border transition-colors flex items-center justify-center gap-1 ${
-                  sentiment === 'negative'
-                    ? 'border-red-500 bg-red-50 text-red-700'
-                    : 'border-slate-300 hover:border-red-500'
-                }`}
-              >
-                <TrendingDown className="w-4 h-4" /> Negative
-              </button>
-            </div>
-          </div>
-
-          {/* Submit */}
-          <div className="flex gap-3 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-1 py-2 text-sm font-medium text-slate-600 border border-slate-300 rounded-lg hover:bg-slate-50"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="flex-1 py-2 text-sm font-medium text-white bg-seed rounded-lg hover:bg-seed-dark"
-            >
-              Add Node
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}

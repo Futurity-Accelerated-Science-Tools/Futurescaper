@@ -158,17 +158,16 @@ Positioned as a fixed element at the bottom of the input form view (`fixed botto
 
 ## View 2: Futurescaper Map (`FuturescapeMap.tsx`)
 
-Full-screen layout with two regions: a 320px-wide left sidebar and the remaining space for the ReactFlow graph.
+Full-screen layout with three regions: a 320px-wide left sidebar, the ReactFlow graph canvas (occupying all remaining space), and a collapsible on-map filter panel anchored to the right edge of the canvas.
 
 ### Left Sidebar
 
-A vertical stack of collapsible sections with `bg-white` background and `border-r border-slate-200`:
+A vertical stack of sections with `bg-white` background and `border-r border-slate-200`:
 
 #### Section 1: Scenario Header
 - **Back button**: ArrowLeft icon + "Back" text — navigates to input form
 - **Title**: Bold slate-900
-- **Description**: sm slate-600, clamped to 3 lines
-- **"Add Manual Node" button**: In the header area, opens the Add Manual Node Modal (see below)
+- **Description**: sm slate-600, scrollable (max-h-32)
 
 #### Section 2: Error Display (conditional)
 - Red-50 background with AlertCircle icon
@@ -195,71 +194,60 @@ A vertical stack of collapsible sections with `bg-white` background and `border-
   - "Primary impact area: [STEEPE category]"
 - **Top Concerns** section:
   - Red TrendingDown icon + "Top Concerns" heading (red-700)
-  - Up to 3 consequence excerpts (100 char max) with red-200 left border
+  - Up to 3 consequence excerpts with red-200 left border
+  - **Clickable**: each item calls `setActiveNodeId(c.id)`, selecting the node on the graph and triggering focus-path + auto-center. Hover: `text-slate-900`, `border-red-400`.
 - **Top Opportunities** section:
   - Green TrendingUp icon + "Top Opportunities" heading (green-700)
   - Up to 3 consequence excerpts with green-200 left border
+  - **Clickable**: same behavior as concerns. Hover: `text-slate-900`, `border-green-400`.
 
-#### Section 5: Highlight Filters
-- "Highlight Filters" heading with "Reset" link
-- Filter groups, each with compact pill buttons:
-
-  **Importance** (Star icon):
-  - Critical: amber-100/amber-700 when active
-  - High: blue-100/blue-700 when active
-  - Medium, Low: slate-200/slate-700 when active
-  - Inactive: slate-100/slate-400
-
-  **High Impact Filter** ("Key Only" toggle):
-  - Zap icon + "Key Only" label
-  - Filters the map to show only nodes that are probable/plausible AND critical/high importance
-
-  **Probability** (Target icon):
-  - Each button uses its probability color from `PROBABILITY_COLORS` (green/blue/amber/red) at 20% opacity for background
-
-  **Category** (Layers icon):
-  - 6 STEEPE buttons labeled with first 4 letters ("Soci", "Tech", "Econ", "Envi", "Poli", "Ethi")
-  - Active: Category color at 20% opacity background, full color text and border
-  - Inactive: slate-100/slate-400
-
-  **Sentiment**:
-  - Positive: TrendingUp icon + "+" — green-100/green-700
-  - Negative: TrendingDown icon + "-" — red-100/red-700
-  - Neutral: Minus icon + "o" — slate-200/slate-700
-  - **Ideas**: Lightbulb icon + "Ideas" — amber-100/amber-700. Toggles visibility of solution/idea nodes.
-
-  **Order**:
-  - "1", "2", "3" buttons — indigo-100/indigo-700 when active
-
-Deselecting a filter dims (not hides) matching nodes to 35% opacity with 50% grayscale.
-
-#### Section 6: Solutions Panel (conditional)
-- Lightbulb icon (amber-500) + "Solutions (N)" heading
-- Collapsible list (max-h-64, scrollable):
-  - Each solution is a yellow-50 card with yellow-200 border
-  - Type badge: "macro" (purple-100/purple-700) or "micro" (blue-100/blue-700)
-  - Category label in slate-500
-  - Solution text in slate-700
-
-#### Section 7: Related Subjects Panel (conditional, after generation)
+#### Section 5: Related Subjects Panel (conditional, after generation)
 - Shows related academic/policy subjects found by AI
 - Displays after generation completes in the sidebar
 
-#### Section 8: Detail Panel (conditional, on node selection)
-- See Detail Panel section below
-
-#### Section 9: Export Panel (always visible at bottom)
+#### Section 6: Export Panel (always visible at bottom)
 - See Export Panel section below
+
+**Note**: Highlight filters have been moved to an on-map right panel (see "On-Map Filter Panel" below). The DetailPanel has been removed from the sidebar; all node actions are now on the ActionToolbar directly on the graph.
 
 ### Main Graph Area
 
 The ReactFlow canvas occupies all space right of the sidebar. Configuration:
-- Background: `#ffffff` (white, no dot grid)
+- Background: `#e8e8f0` color with 20px gap grid
 - Controls: Default ReactFlow zoom/pan controls (bottom-left)
 - MiniMap: Shows node colors by sentiment (positive=green, negative=red, neutral=gray, seed=indigo). Mask: black at 10% opacity.
 - Zoom: 0.1x to 2x range
 - Fit view on load with 0.2 padding
 - Connection mode: Loose
+- **ReactFlowInstance** captured via `onInit` callback for programmatic viewport control (centerOnNode, fitView)
+
+#### Tidy Layout Button
+
+Positioned top-right of the canvas (shifts left when filter panel is expanded). Only visible when generation is complete and consequences exist.
+- LayoutGrid icon + "Tidy Layout" text
+- `bg-white/95 backdrop-blur-sm rounded-lg shadow-md border border-slate-200`
+- Resets all node positions to a clean radial arrangement via `computeRadialLayout` + `resolveCollisions`
+
+#### On-Map Filter Panel
+
+Anchored to the right edge of the ReactFlow canvas, spanning full height. Collapsible between 240px (expanded) and 44px (collapsed).
+
+**Collapsed state** (44px):
+- Vertical strip of icon buttons: Layers (category), TrendingUp (sentiment), Target (probability), Star (importance)
+- Each icon button expands the panel on click
+- Separator line + X (reset) button at bottom
+
+**Expanded state** (240px):
+- Sticky header: Filter icon + "Filters" label + ChevronRight collapse button
+- **Quick actions row**: "Key Only" toggle (orange when active, Zap icon) + "Reset" button
+- **Category** (Layers icon): Vertical list of 6 STEEPE buttons with full labels (e.g. "Social", "Technological"), category-colored backgrounds at 20% opacity when active, per-category node counts
+- **Sentiment**: Vertical list with TrendingUp/TrendingDown/Minus icons + full labels + counts; colored borders and backgrounds when active
+- **Probability** (Target icon): Vertical list with capitalized labels + counts, probability-colored backgrounds at 20% opacity
+- **Importance** (Star icon): Vertical list with capitalized labels + counts; Critical=amber, High=blue, Medium/Low=slate when active
+- **Order**: Vertical list showing only orders with nodes (e.g. "1st Order", "2nd Order"), indigo when active, with counts
+- **Ideas & Solutions** toggle: Full-width amber button with Lightbulb icon + count
+
+All filter buttons show node counts in parentheses. Deselecting a filter dims (not hides) matching nodes to 35% opacity with 50% grayscale.
 
 ### Center Screen Progress Overlay
 
@@ -295,17 +283,17 @@ The central node representing the scenario. Now interactive:
   - Description: sm, `text-seed-dark/70`, clamped to 3 lines
 - Handles: 4 source handles (top, right, bottom, left), 12x12px, `bg-seed`
 
-#### Seed Radial Menu
+#### Seed Action Toolbar
 
-When the seed node is clicked/selected, a floating radial menu appears with 2 action buttons:
-- **Top (green)**: Add Child — creates a blank child node in inline edit mode
-- **Bottom (purple)**: AI Generate — creates 20 placeholder nodes, then replaces them with AI-generated results
+When the seed node is clicked/selected, a floating action toolbar appears below the node with 2 buttons:
+- **Add Child** (green): Creates a blank order-1 child node in inline edit mode
+- **AI Generate** (purple): Creates 20 placeholder nodes, then replaces them with AI-generated first-order results
 
-Buttons use the same `node-action-btn` CSS class and spring animation as the consequence radial menu.
+Buttons use the same `node-action-btn` CSS class and spring animation as the consequence action toolbar.
 
 ### Consequence Node (`ConsequenceNode` in `ConsequenceNode.tsx`)
 
-Each consequence is rendered as a card node. It is wrapped in `React.memo` for performance.
+Each consequence is rendered as a card node. It is wrapped in `React.memo` with a custom `consequenceNodeAreEqual` comparator that checks only rendering-relevant data fields (consequence, isSelected, isDimmed, isFocusDimmed, isGenerating, isGeneratingChildren, isGeneratingIdeas, isNewlyExpanded, isPlaceholder, isGenerationInProgress, draggable) and ignores callback function references.
 
 **Sizing**: Base width 220px, scaled by importance multiplier (0.8x to 1.4x). Critical nodes are 308px wide, low-importance nodes are 176px wide. Expands to 340px during inline edit mode.
 
@@ -318,7 +306,9 @@ Each consequence is rendered as a card node. It is wrapped in `React.memo` for p
 - Critical nodes get a `ring-2 ring-offset-2 ring-amber-400` highlight ring
 - Dimmed nodes: `opacity: 0.35, filter: grayscale(50%)` with 0.3s transition
 - **Newly expanded glow**: Nodes added via expansion get a pulsing amber glow animation (`newExpandGlow` keyframe)
-- Hover scale is suppressed when the radial menu is showing: `.consequence-node:has(.node-action-btn) { transform: none }`
+- **Focus dimmed**: During focus-path animation, non-chain nodes receive a `focus-dimmed` class
+- **Hover expansion**: After 500ms hover, the node width expands to `max(nodeWidth, 280px)` to show more content; same expansion on selection. Width transition: `0.25s ease`.
+- Hover scale is suppressed when the action toolbar is showing: `.consequence-node:has(.node-action-btn) { transform: none }`
 
 **Content structure**:
 
@@ -365,23 +355,28 @@ Edges connect parent nodes to child nodes:
 
 ---
 
-## Interactive Radial Menu
+## Action Toolbar
 
-When clicking a consequence node, a floating radial menu appears around the node with 4 action buttons at cardinal positions:
+When clicking a consequence node, a floating horizontal `ActionToolbar` appears below the node (positioned at `top: calc(100% + 12px)`, centered via `translateX(-50%)`). The toolbar is split into two grouped containers separated by a gap:
 
-- **Top (blue)**: Edit — enters inline edit mode on the node
-- **Right (green)**: Add Child — creates a blank child node in inline edit mode
-- **Bottom (purple)**: AI Generate — creates 3 placeholder children, then replaces them with AI-generated results
-- **Left (red)**: Delete — removes the node and its direct children (with confirmation)
+**Management group** (left):
+- **Edit** (Pencil icon, blue-500): Enters inline edit mode on the node
+- **Delete** (Trash2 icon, red-500): Removes the node and its entire branch (with confirmation showing total count)
+
+**Creation group** (right):
+- **Add Child** (Plus icon, green-500): Creates a blank child node in inline edit mode
+- **AI Expand** (Sparkles icon, purple-500): Creates 3 placeholder children, then replaces them with AI-generated results. Shows Loader2 spinner while generating.
+- **Ideas** (Lightbulb icon, amber-500): Generates 2 solution/idea nodes attached to this consequence. Shows Loader2 spinner while generating.
 
 **Styling**:
-- Buttons use the `node-action-btn` CSS class
+- Each group: `bg-white/95 backdrop-blur-sm rounded-xl shadow-lg border border-slate-200/80 p-1.5 gap-1.5`
+- Buttons: `w-14 h-14 rounded-xl` (56x56px), colored backgrounds, white icons (`w-6 h-6`)
 - Spring animation on appearance: `nodeActionAppear` keyframe (scale(0) to scale(1.15) to scale(1) with opacity, `cubic-bezier(0.34, 1.56, 0.64, 1)`)
-- Staggered animation delays: 0ms, 40ms, 80ms, 120ms per button
-- Labels appear on hover via `node-action-label` class (opacity transition)
-- All buttons call `e.stopPropagation()` to prevent ReactFlow drag behavior
+- Staggered animation delays: 0ms, 40ms, 80ms, 120ms, 160ms per button
+- Hover tooltips: `text-[10px]` labels below each button, shown on hover via opacity transition
+- All buttons and the toolbar container call `e.stopPropagation()` and `onPointerDown` stopPropagation to prevent ReactFlow drag behavior
 
-**Generation disabled**: During comprehensive generation (`isGenerationInProgress` flag), the radial menu is hidden and not rendered.
+**Generation disabled**: During comprehensive generation (`isGenerationInProgress` flag), the toolbar is hidden and not rendered.
 
 ---
 
@@ -400,40 +395,15 @@ The node is **not draggable** during edit mode.
 
 ---
 
-## Add Manual Node Modal
+## Removed UI Elements
 
-A modal dialog accessible via the "Add Manual Node" button in the sidebar header. Contains:
+### Add Manual Node Modal (removed)
 
-- **Text area**: For entering consequence text
-- **Parent selector dropdown**: To choose which existing node the new node connects to
-- **STEEPE category grid**: 6 category buttons for classification
-- **Sentiment buttons**: Positive / Negative / Neutral selection
+Previously a modal dialog in the sidebar for manual node creation. Replaced by the "Add Child" button in the seed and consequence ActionToolbar, which creates child nodes inline on the graph.
 
-This is separate from the radial menu's Add Child action, which creates the child inline on the graph.
+### Detail Panel (removed)
 
----
-
-## Detail Panel (`DetailPanel.tsx`)
-
-Appears in the sidebar when a node is selected. 320px wide, `rounded-xl shadow-lg`.
-
-**Header**: STEEPE category badge + X close button
-
-**Consequence display**: Colored card with 4px left border, sentiment icon + full text
-
-**Metadata section**:
-- Order: "First-Order" / "Second-Order" / "Third-Order" + optional "Wildcard" badge with Zap icon (purple-600)
-- Sentiment: Icon + capitalized label in sentiment color
-
-**"Caused By" section** (conditional): Shows parent consequence text in parent's sentiment-colored card
-
-**"Leads To" section** (conditional): Shows child consequence count + scrollable list (max-h-32) of child texts in their sentiment colors
-
-**Action buttons** (at bottom, separated by border-t):
-- **"Expand"** button: Generates 3-4 more children for this node via AI. Shows loading state during the async operation.
-- **"Generate Ideas"** button: Creates solution/idea nodes attached to this consequence. Shows loading state during the async operation.
-- "Edit" (Edit3 icon): Opens inline edit mode on the node
-- "Delete" (Trash2 icon): Removes the consequence with confirmation
+Previously appeared in the sidebar when a node was selected (`DetailPanel.tsx`), showing node metadata, parent/child relationships, and action buttons (Expand, Generate Ideas, Edit, Delete). All node actions are now available via the on-graph `ActionToolbar`. Node selection triggers focus-path animation and auto-center instead.
 
 ---
 
@@ -505,6 +475,8 @@ Note: This component is defined but not currently used — FuturescapeMap implem
 - `dash` (0.5s, linear, infinite): Stroke-dashoffset animation for animated edges during generation.
 - `nodeActionAppear`: `scale(0)` to `scale(1.15)` to `scale(1)` with opacity transition. Uses `cubic-bezier(0.34, 1.56, 0.64, 1)` for spring effect. Staggered delays: 0ms, 40ms, 80ms, 120ms per radial menu button.
 - `newExpandGlow`: Pulsing amber `box-shadow` animation applied to nodes added via the expand/generate actions.
+- `focus-animating .react-flow__node`: 400ms ease-out transition on `transform` — enables smooth node movement during focus-path animation.
+- `unfocus-animating .react-flow__node`: 300ms ease-out transition on `transform` — enables smooth restoration of positions on deselect.
 
 **ReactFlow Overrides**:
 - Handles hidden by default (opacity: 0), shown on node hover (opacity: 0.5)
@@ -515,7 +487,8 @@ Note: This component is defined but not currently used — FuturescapeMap implem
 **Consequence Node**:
 - Hover: `scale(1.05)` + `box-shadow: 0 10px 40px -10px rgba(0,0,0,0.2)`
 - Transition: transform and box-shadow at 0.2s ease
-- `.consequence-node:has(.node-action-btn)`: `transform: none` — prevents hover scale when radial menu is showing
+- `.consequence-node:has(.node-action-btn)`: `transform: none` — prevents hover scale when action toolbar is showing
+- `.focus-dimmed`: Applied to non-chain nodes during focus-path animation
 
 **Node Action Label**:
 - `.node-action-label`: opacity transition on hover for radial menu button labels
