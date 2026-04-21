@@ -7,6 +7,7 @@ import {
   buildSecondOrderPrompt,
   buildThirdOrderPrompt,
   buildSolutionsPrompt,
+  buildChildConsequencesPrompt,
   parseConsequencesResponse,
   parseSolutionsResponse,
 } from './prompts';
@@ -77,6 +78,17 @@ export async function generateSolutionsWithAI(
   const prompt = buildSolutionsPrompt(input, consequences);
   const response = await callAPI([{ role: 'user', content: prompt }], SYSTEM_PROMPT);
   return parseSolutionsResponse(response);
+}
+
+// Generate child consequences from a specific parent node (used by radial menu)
+export async function generateChildConsequencesWithAI(
+  input: FutureInput,
+  parentConsequence: Consequence
+): Promise<Consequence[]> {
+  const prompt = buildChildConsequencesPrompt(input, parentConsequence);
+  const response = await callAPI([{ role: 'user', content: prompt }], SYSTEM_PROMPT);
+  const newOrder = Math.min(parentConsequence.order + 1, 5) as ConsequenceOrder;
+  return parseConsequencesResponse(response, newOrder, parentConsequence.id);
 }
 
 // Phase type for callbacks (reduced to 3 orders)

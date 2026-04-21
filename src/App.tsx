@@ -14,13 +14,22 @@ export interface ImportedData {
 function App() {
   const [input, setInput] = useState<FutureInput | null>(null);
   const [importedData, setImportedData] = useState<ImportedData | null>(null);
+  const [manualMode, setManualMode] = useState(false);
 
   const handleSubmit = (data: FutureInput) => {
+    setManualMode(false);
+    setInput(data);
+    setImportedData(null);
+  };
+
+  const handleManualMode = (data: FutureInput) => {
+    setManualMode(true);
     setInput(data);
     setImportedData(null);
   };
 
   const handleImport = (data: ImportedData) => {
+    setManualMode(false);
     setInput(data.input);
     setImportedData(data);
   };
@@ -28,10 +37,11 @@ function App() {
   const handleBack = () => {
     setInput(null);
     setImportedData(null);
+    setManualMode(false);
   };
 
   if (!input) {
-    return <InputForm onSubmit={handleSubmit} onImport={handleImport} />;
+    return <InputForm onSubmit={handleSubmit} onImport={handleImport} onManualMode={handleManualMode} />;
   }
 
   return (
@@ -40,6 +50,7 @@ function App() {
       onBack={handleBack}
       onApiError={() => {}}
       importedData={importedData}
+      manualMode={manualMode}
     />
   );
 }

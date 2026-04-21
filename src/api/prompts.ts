@@ -499,6 +499,57 @@ Return ONLY a JSON array:
 ]`;
 }
 
+// Generate child consequences from a specific parent node (used by radial menu AI Generate)
+export function buildChildConsequencesPrompt(
+  input: FutureInput,
+  parentConsequence: Consequence
+): string {
+  const nextOrder = Math.min(parentConsequence.order + 1, 5) as ConsequenceOrder;
+  const orderLabels: Record<number, string> = {
+    2: 'second-order ripple effects',
+    3: 'third-order cascade effects',
+    4: 'fourth-order systemic transformations',
+    5: 'fifth-order wildcard developments',
+  };
+  const orderLabel = orderLabels[nextOrder] || 'downstream consequences';
+
+  const perspectiveText = input.perspective
+    ? `\n**Evaluate ALL sentiment from the perspective of: ${input.perspective}**\n- "positive" = HELPS ${input.perspective}\n- "negative" = HURTS ${input.perspective}`
+    : '';
+
+  return `## Task: Generate Child Consequences
+
+You are analyzing consequences of this scenario:
+**Scenario:** ${input.title}
+${input.description}${perspectiveText}
+
+A user has selected this specific consequence and wants to explore its downstream effects:
+
+**Parent Consequence [Order ${parentConsequence.order}, ${parentConsequence.category.toUpperCase()}, ${parentConsequence.sentiment}]:**
+"${parentConsequence.text}"
+
+Generate exactly **3 ${orderLabel}** that flow directly from this parent consequence.
+
+Requirements:
+1. Each must be a logical, specific consequence OF THE PARENT (not the original scenario)
+2. Spread across different STEEPE categories where possible
+3. Include a mix of sentiments — remember consequences often flip sentiment
+4. Be concrete with specific details, institutions, figures
+5. Vary probability and timeframe
+
+Return ONLY a JSON array:
+[
+  {
+    "text": "Specific consequence flowing from the parent",
+    "sentiment": "positive|negative|neutral",
+    "category": "social|technological|economic|environmental|political|ethical",
+    "timeFrame": "immediate|short-term|long-term",
+    "probability": "probable|plausible|possible|wildcard",
+    "importance": "critical|high|medium|low"
+  }
+]`;
+}
+
 // Parse and validate API response for consequences
 export function parseConsequencesResponse(
   response: string,

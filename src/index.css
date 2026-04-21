@@ -99,13 +99,35 @@ button:active {
 }
 
 .consequence-node {
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
-  backdrop-filter: blur(8px);
+  transition: box-shadow 0.2s ease;
+  /* backdrop-filter removed — caused blur artifacts with ReactFlow transforms */
 }
 
 .consequence-node:hover {
-  transform: scale(1.02);
-  box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.15);
+}
+
+/* Focus-path animation: smooth position transitions during focus/unfocus */
+.focus-animating .react-flow__node {
+  transition: transform 400ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+.focus-animating .react-flow__edge-path {
+  transition: d 400ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+.unfocus-animating .react-flow__node {
+  transition: transform 300ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+.unfocus-animating .react-flow__edge-path {
+  transition: d 300ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+/* Focus-dimmed: node background stays visible, content fades */
+.consequence-node.focus-dimmed > *:not(.react-flow__handle) {
+  opacity: 0.25;
+  transition: opacity 400ms ease;
+}
+.consequence-node:not(.focus-dimmed) > *:not(.react-flow__handle) {
+  transition: opacity 300ms ease;
 }
 
 @keyframes pulse-ring {
@@ -184,12 +206,26 @@ button:active {
   to { stroke-dashoffset: -10; }
 }
 
+/* Default: nodes render above edges */
 .react-flow__edges {
   z-index: 0 !important;
 }
-
 .react-flow__nodes {
   z-index: 1 !important;
+}
+
+/* During focus-path: edges above default node layer, but the nodes container
+   uses z-index:auto so it does NOT create a stacking context. This lets
+   individual nodes (with their own z-index) participate in the viewport's
+   stacking order:
+   - Selected node (z-index:1001) renders ABOVE edges (z-index:2)
+   - Chain ancestor nodes (z-index:1000) render ABOVE edges
+   - Non-chain nodes (no z-index) render BELOW edges */
+.has-focus-path .react-flow__edges {
+  z-index: 2 !important;
+}
+.has-focus-path .react-flow__nodes {
+  z-index: auto !important;
 }
 
 /* Gradient bar like in reference image */
@@ -265,4 +301,57 @@ button:active {
 
 .react-flow__background {
   background: #ffffff !important;
+}
+
+/* --- Action toolbar animation --- */
+@keyframes toolbarSlideIn {
+  0% {
+    transform: translateX(-50%) translateY(-4px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+  }
+}
+
+.node-action-toolbar {
+  animation: toolbarSlideIn 0.15s ease-out forwards;
+}
+
+/* Individual button spring pop-in */
+@keyframes actionBtnPop {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.15);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.node-action-btn {
+  animation: actionBtnPop 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  opacity: 0;
+}
+
+/* Prevent hover scale when toolbar is showing */
+.consequence-node:has(.node-action-toolbar) {
+  transform: none !important;
+}
+
+/* --- Node hover expansion --- */
+@keyframes nodeExpand {
+  from { opacity: 0; max-height: 0; }
+  to { opacity: 1; max-height: 200px; }
+}
+
+.node-expanded-meta {
+  animation: nodeExpand 0.25s ease-out forwards;
+  overflow: hidden;
 }

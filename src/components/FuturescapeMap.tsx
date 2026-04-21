@@ -31,13 +31,14 @@ import {
 } from '../types';
 import { generateComprehensiveFuturescape, hasApiKey, GenerationPhase } from '../api/claude';
 import { generateConsequences } from '../mockData';
-import { ConsequenceNode, SeedNode } from './ConsequenceNode';
+import { ConsequenceNode, SeedNode, ConsequenceNodeData } from './ConsequenceNode';
 import { DetailPanel } from './DetailPanel';
 import { ExportPanel } from './ExportPanel';
-import { ArrowLeft, AlertCircle, Lightbulb, FileText, Star, Target, Layers, TrendingUp, TrendingDown, Minus, Plus, Loader2, Expand, X, Send, Sparkles, Zap } from 'lucide-react';
-import { expandNodeConsequences, freePromptExpand, generateSolutionIdeas } from '../api/claude';
+import { ArrowLeft, AlertCircle, Lightbulb, FileText, Star, Target, Layers, TrendingUp, TrendingDown, Minus, Plus, Loader2, Expand, X, Send, Sparkles, Zap, Hammer, LayoutGrid, Filter, ChevronRight, ChevronLeft } from 'lucide-react';
+import { expandNodeConsequences, freePromptExpand, generateSolutionIdeas, generateConsequencesWithAI, generateChildConsequencesWithAI } from '../api/claude';
 import { findRelevantSubjects, RelevantSubject } from '../api/subjects';
 import { RelatedSubjects } from './RelatedSubjects';
+import { computeRadialLayout, resolveCollisions, getOptimalHandles, computeFocusPositions, Position } from '../layout';
 
 const nodeTypes = {
   seed: SeedNode,
@@ -56,13 +57,14 @@ interface FuturescapeMapProps {
   onBack: () => void;
   onApiError?: () => void;
   importedData?: ImportedData | null;
+  manualMode?: boolean;
 }
 
 type ExtendedPhase = 'idle' | 'first-order' | 'second-order' | 'third-order' | 'solutions' | 'complete';
 
-export function FuturescapeMap({ input, onBack, onApiError, importedData }: FuturescapeMapProps) {
+export function FuturescapeMap({ input, onBack, onApiError, importedData, manualMode = false }: FuturescapeMapProps) {
   const [consequences, setConsequences] = useState<Consequence[]>(importedData?.consequences || []);
-  const [generationPhase, setGenerationPhase] = useState<ExtendedPhase>(importedData ? 'complete' : 'idle');
+  const [generationPhase, setGenerationPhase] = useState<ExtendedPhase>(importedData ? 'complete' : (manualMode ? 'complete' : 'idle'));
   const [progressMessage, setProgressMessage] = useState<string>('');
   const [isPaused, setIsPaused] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -78,10 +80,21 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData }: Futu
   const [showNewHighlight, setShowNewHighlight] = useState(false);
   const [lastExpansionTime, setLastExpansionTime] = useState<number | null>(null);
   const [showHighImpact, setShowHighImpact] = useState(false);
+  const [filterPanelCollapsed, setFilterPanelCollapsed] = useState(false);
   const [relatedSubjects, setRelatedSubjects] = useState<RelevantSubject[]>([]);
   const [isLoadingSubjects, setIsLoadingSubjects] = useState(false);
   const subjectsRequested = useRef(false);
-  const generationStarted = useRef(importedData ? true : false);
+  const generationStarted = useRef(importedData ? true : (manualMode ? true : false));
+
+  // ── Interactive node state (radial menu / inline editing) ──
+  const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
+  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
+  const [isGeneratingChildrenFor, setIsGeneratingChildrenFor] = useState<string | null>(null);
+
+  const [isGeneratingIdeasFor, setIsGeneratingIdeasFor] = useState<string | null>(null);
+
+  // Computed: is comprehensive generation currently running?
+  const isGenerationRunning = generationPhase !== 'complete' && generationPhase !== 'idle';
 
   // Highlight filters - nodes NOT in these filters get dimmed (not hidden)
   const [highlightFilters, setHighlightFilters] = useState({
@@ -95,6 +108,12 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData }: Futu
 
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+
+  // ── Focus-path animation state ──
+  const preFocusPositionsRef = useRef<Map<string, Position> | null>(null);
+  const [focusAnimClass, setFocusAnimClass] = useState<string>('');
+  const focusAnimTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevActiveNodeIdRef = useRef<string | null>(null);
 
   // Check if a consequence should be highlighted (not dimmed)
   const isHighlighted = useCallback((c: Consequence): boolean => {
@@ -128,16 +147,30 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData }: Futu
       4: consequences.filter(c => c.order === 4).length,
       5: consequences.filter(c => c.order === 5).length,
     };
-    const byCategory = {
+    const byCategory: Record<string, number> = {
       social: consequences.filter(c => c.category === 'social').length,
       technological: consequences.filter(c => c.category === 'technological').length,
       economic: consequences.filter(c => c.category === 'economic').length,
       environmental: consequences.filter(c => c.category === 'environmental').length,
       political: consequences.filter(c => c.category === 'political').length,
+      ethical: consequences.filter(c => c.category === 'ethical').length,
     };
-    const criticalCount = consequences.filter(c => c.importance === 'critical').length;
-    const highCount = consequences.filter(c => c.importance === 'high').length;
-    return { bySentiment, byOrder, byCategory, criticalCount, highCount, total: consequences.length };
+    const byProbability: Record<string, number> = {
+      probable: consequences.filter(c => c.probability === 'probable').length,
+      plausible: consequences.filter(c => c.probability === 'plausible').length,
+      possible: consequences.filter(c => c.probability === 'possible').length,
+      wildcard: consequences.filter(c => c.probability === 'wildcard').length,
+    };
+    const byImportance: Record<string, number> = {
+      critical: consequences.filter(c => c.importance === 'critical').length,
+      high: consequences.filter(c => c.importance === 'high').length,
+      medium: consequences.filter(c => c.importance === 'medium').length,
+      low: consequences.filter(c => c.importance === 'low').length,
+    };
+    const ideasCount = consequences.filter(c => c.nodeType === 'solution' || c.nodeType === 'idea').length;
+    const criticalCount = byImportance.critical;
+    const highCount = byImportance.high;
+    return { bySentiment, byOrder, byCategory, byProbability, byImportance, ideasCount, criticalCount, highCount, total: consequences.length };
   }, [consequences]);
 
   // Generate TLDR summary
@@ -179,252 +212,671 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData }: Futu
     };
   }, [consequences, stats.byCategory]);
 
-  // Helper function to determine optimal handle positions based on relative positions
-  const getOptimalHandles = (
-    sourcePos: { x: number; y: number },
-    targetPos: { x: number; y: number }
-  ): { sourceHandle: string; targetHandle: string } => {
-    const dx = targetPos.x - sourcePos.x;
-    const dy = targetPos.y - sourcePos.y;
-    const angle = Math.atan2(dy, dx) * (180 / Math.PI); // -180 to 180
+  // ── Interactive handlers (must be before generateNodesAndEdges) ──
 
-    // Determine the best exit point from source and entry point to target
-    // based on the angle between them
-    let sourceHandle: string;
-    let targetHandle: string;
+  const handleSeedClick = useCallback(() => {
+    setActiveNodeId(prev => prev === 'seed' ? null : 'seed');
+    setEditingNodeId(null);
+  }, []);
 
-    if (angle >= -45 && angle < 45) {
-      // Target is to the right
-      sourceHandle = 'right-source';
-      targetHandle = 'left';
-    } else if (angle >= 45 && angle < 135) {
-      // Target is below
-      sourceHandle = 'bottom-source';
-      targetHandle = 'top';
-    } else if (angle >= -135 && angle < -45) {
-      // Target is above
-      sourceHandle = 'top-source';
-      targetHandle = 'bottom';
+  const handleNodeClick = useCallback((id: string) => {
+    setActiveNodeId(prev => prev === id ? null : id);
+    setEditingNodeId(null);
+    setSelectedNodeId(id); // Also select for DetailPanel
+  }, []);
+
+  const handleStartEdit = useCallback((id: string) => {
+    setEditingNodeId(id);
+    setActiveNodeId(null);
+  }, []);
+
+  const handleSaveEdit = useCallback((id: string, updates: Partial<Consequence>) => {
+    setConsequences(prev =>
+      prev.map(c => c.id === id ? { ...c, ...updates } : c)
+    );
+    setEditingNodeId(null);
+    // If text is empty after save on a new blank node, remove it
+    if (updates.text !== undefined && !updates.text.trim()) {
+      setConsequences(prev => prev.filter(c => c.id !== id));
+    }
+  }, []);
+
+  const handleCancelEdit = useCallback((id: string) => {
+    // If this was a new blank node with no text, remove it
+    const node = consequences.find(c => c.id === id);
+    if (node && !node.text.trim()) {
+      setConsequences(prev => prev.filter(c => c.id !== id));
+    }
+    setEditingNodeId(null);
+  }, [consequences]);
+
+  const handleSeedAddChild = useCallback(() => {
+    const newId = `manual-${Date.now()}`;
+    const newConsequence: Consequence = {
+      id: newId,
+      text: '',
+      sentiment: 'neutral',
+      category: 'social',
+      order: 1,
+      parentId: 'seed',
+      probability: 'plausible',
+      importance: 'medium',
+      isManual: true,
+    };
+    setConsequences(prev => [...prev, newConsequence]);
+    setEditingNodeId(newId);
+    setActiveNodeId(null);
+  }, []);
+
+  const handleSeedGenerateChildren = useCallback(async () => {
+    setIsGeneratingChildrenFor('seed');
+    setActiveNodeId(null);
+
+    // Create 20 placeholder nodes
+    const placeholderIds: string[] = [];
+    const placeholders: Consequence[] = [];
+    for (let i = 0; i < 20; i++) {
+      const id = `placeholder-${Date.now()}-${i}`;
+      placeholderIds.push(id);
+      placeholders.push({
+        id,
+        text: '',
+        sentiment: 'neutral',
+        category: 'social',
+        order: 1,
+        parentId: 'seed',
+      });
+    }
+    setConsequences(prev => [...prev, ...placeholders]);
+
+    try {
+      const realConsequences = await generateConsequencesWithAI(input, 1, []);
+      setConsequences(prev => [
+        ...prev.filter(c => !placeholderIds.includes(c.id)),
+        ...realConsequences,
+      ]);
+    } catch (err) {
+      console.error('Error generating seed children:', err);
+      setConsequences(prev => prev.filter(c => !placeholderIds.includes(c.id)));
+      setError((err as Error).message);
+    }
+    setIsGeneratingChildrenFor(null);
+  }, [input]);
+
+  const handleAddChild = useCallback((parentId: string) => {
+    const parent = consequences.find(c => c.id === parentId);
+    const newOrder = parent ? (Math.min(parent.order + 1, 5) as ConsequenceOrder) : 1;
+    const newId = `manual-${Date.now()}`;
+    const newConsequence: Consequence = {
+      id: newId,
+      text: '',
+      sentiment: 'neutral',
+      category: parent?.category || 'social',
+      order: newOrder,
+      parentId,
+      probability: 'plausible',
+      importance: 'medium',
+      isManual: true,
+    };
+    setConsequences(prev => [...prev, newConsequence]);
+    setEditingNodeId(newId);
+    setActiveNodeId(null);
+  }, [consequences]);
+
+  const handleGenerateChildren = useCallback(async (parentId: string) => {
+    const parent = consequences.find(c => c.id === parentId);
+    if (!parent) return;
+
+    setIsGeneratingChildrenFor(parentId);
+    setActiveNodeId(null);
+
+    // Create 3 placeholder nodes
+    const newOrder = Math.min(parent.order + 1, 5) as ConsequenceOrder;
+    const placeholderIds: string[] = [];
+    const placeholders: Consequence[] = [];
+    for (let i = 0; i < 3; i++) {
+      const id = `placeholder-${Date.now()}-${i}`;
+      placeholderIds.push(id);
+      placeholders.push({
+        id,
+        text: '',
+        sentiment: 'neutral',
+        category: 'social',
+        order: newOrder,
+        parentId,
+      });
+    }
+    setConsequences(prev => [...prev, ...placeholders]);
+
+    try {
+      const realConsequences = await generateChildConsequencesWithAI(input, parent);
+      setConsequences(prev => [
+        ...prev.filter(c => !placeholderIds.includes(c.id)),
+        ...realConsequences,
+      ]);
+    } catch (err) {
+      console.error('Error generating children:', err);
+      setConsequences(prev => prev.filter(c => !placeholderIds.includes(c.id)));
+      setError((err as Error).message);
+    }
+    setIsGeneratingChildrenFor(null);
+  }, [consequences, input]);
+
+  const handleRadialGenerateIdeas = useCallback(async (nodeId: string) => {
+    const targetNode = consequences.find(c => c.id === nodeId);
+    if (!targetNode) return;
+
+    setIsGeneratingIdeasFor(nodeId);
+    setActiveNodeId(null);
+
+    // Create 2 placeholder nodes for ideas
+    const newOrder = Math.min(targetNode.order + 1, 5) as ConsequenceOrder;
+    const placeholderIds: string[] = [];
+    const placeholders: Consequence[] = [];
+    for (let i = 0; i < 2; i++) {
+      const id = `placeholder-${Date.now()}-${i}`;
+      placeholderIds.push(id);
+      placeholders.push({
+        id,
+        text: '',
+        sentiment: 'positive',
+        category: targetNode.category,
+        order: newOrder,
+        parentId: nodeId,
+      });
+    }
+    setConsequences(prev => [...prev, ...placeholders]);
+
+    try {
+      const expandTime = Date.now();
+      const newIdeas = await generateSolutionIdeas(input, targetNode, consequences);
+      const stamped = newIdeas.map(c => ({ ...c, expandedAt: expandTime }));
+      setConsequences(prev => [
+        ...prev.filter(c => !placeholderIds.includes(c.id)),
+        ...stamped,
+      ]);
+      setLastExpansionTime(expandTime);
+      setShowNewHighlight(true);
+    } catch (err) {
+      console.error('Error generating ideas:', err);
+      setConsequences(prev => prev.filter(c => !placeholderIds.includes(c.id)));
+      setError((err as Error).message);
+    }
+    setIsGeneratingIdeasFor(null);
+  }, [consequences, input]);
+
+  const handleRadialDelete = useCallback((id: string) => {
+    // Recursively find all descendants
+    const findDescendants = (parentId: string, all: Consequence[]): string[] => {
+      const children = all.filter(c => c.parentId === parentId);
+      const childIds = children.map(c => c.id);
+      const grandchildIds = children.flatMap(c => findDescendants(c.id, all));
+      return [...childIds, ...grandchildIds];
+    };
+
+    const descendantIds = findDescendants(id, consequences);
+    const totalToDelete = descendantIds.length + 1; // +1 for the node itself
+
+    let message: string;
+    if (descendantIds.length === 0) {
+      message = 'Delete this node?';
     } else {
-      // Target is to the left
-      sourceHandle = 'left-source';
-      targetHandle = 'right';
+      message = `Delete this node and its entire branch?\n\nThis will remove ${totalToDelete} node${totalToDelete > 1 ? 's' : ''} total (this node + ${descendantIds.length} descendant${descendantIds.length > 1 ? 's' : ''}).`;
     }
 
-    return { sourceHandle, targetHandle };
-  };
+    if (!confirm(message)) return;
 
-  // Generate nodes and edges from consequences with improved spacing
-  const generateNodesAndEdges = useCallback(
-    (allConsequences: Consequence[], filtered: Consequence[]) => {
-      const newNodes: Node[] = [];
-      const newEdges: Edge[] = [];
+    const idsToRemove = new Set([id, ...descendantIds]);
+    setConsequences(prev => prev.filter(c => !idsToRemove.has(c.id)));
+    setActiveNodeId(null);
+    setSelectedNodeId(null);
+  }, [consequences]);
 
-      // Add seed node at center
-      newNodes.push({
-        id: 'seed',
-        type: 'seed',
-        position: { x: 0, y: 0 },
-        data: { title: input.title, description: input.description },
+  const handlePaneClick = useCallback(() => {
+    setActiveNodeId(null);
+    setEditingNodeId(null);
+  }, []);
+
+  // Find the full ancestor chain for a node (including the node itself)
+  const getAncestorChain = useCallback((nodeId: string | null): Set<string> => {
+    if (!nodeId) return new Set();
+    const chain = new Set<string>();
+    chain.add(nodeId);
+    let currentId: string | undefined = nodeId;
+    while (currentId && currentId !== 'seed') {
+      const node = consequences.find(c => c.id === currentId);
+      if (!node || !node.parentId) break;
+      chain.add(node.parentId);
+      currentId = node.parentId;
+    }
+    chain.add('seed');
+    return chain;
+  }, [consequences]);
+
+  // ─── Build edges from current node positions ────────────────────
+  const buildEdges = useCallback((
+    allConsequences: Consequence[],
+    positionMap: Map<string, Position>,
+  ): Edge[] => {
+    const newEdges: Edge[] = [];
+    const phaseMap: Record<number, ExtendedPhase> = {
+      1: 'first-order', 2: 'second-order', 3: 'third-order', 4: 'complete', 5: 'complete',
+    };
+
+    // Compute ancestor chain for z-index elevation
+    const elevatedNodes = getAncestorChain(activeNodeId);
+    const hasElevation = elevatedNodes.size > 0;
+
+    for (const c of allConsequences) {
+      const parentId = c.parentId || 'seed';
+      const parentPos = positionMap.get(parentId);
+      const childPos = positionMap.get(c.id);
+      if (!parentPos || !childPos) continue;
+
+      const isDimmed = !isHighlighted(c);
+      const isWildcard = c.probability === 'wildcard';
+      const isSolOrIdea = c.nodeType === 'solution' || c.nodeType === 'idea';
+      const edgeColor = isSolOrIdea ? SOLUTION_COLORS.border : isWildcard ? '#8b5cf6' : getSentimentColors(c.sentiment).border;
+      const { sourceHandle, targetHandle } = getOptimalHandles(parentPos, childPos);
+      const isElevated = hasElevation && elevatedNodes.has(parentId) && elevatedNodes.has(c.id);
+
+      newEdges.push({
+        id: `edge-${parentId}-${c.id}`,
+        source: parentId,
+        target: c.id,
+        sourceHandle,
+        targetHandle,
+        type: 'default',
+        zIndex: isElevated ? 999 : undefined,
+        style: {
+          stroke: edgeColor,
+          strokeWidth: isDimmed ? 1 : (isElevated ? 4 : 2),
+          strokeDasharray: isSolOrIdea ? '8,4' : isWildcard ? '5,5' : undefined,
+          opacity: isDimmed ? 0.15 : (isElevated ? 1 : (c.order === 1 ? 0.7 : 0.6)),
+        },
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          color: edgeColor,
+          width: isElevated ? 18 : (c.order === 1 ? 15 : 12),
+          height: isElevated ? 18 : (c.order === 1 ? 15 : 12),
+        },
+        animated: generationPhase === phaseMap[c.order],
+      });
+    }
+    return newEdges;
+  }, [isHighlighted, generationPhase, getAncestorChain, activeNodeId]);
+
+  // ─── Build data object for a single consequence node ───────────
+  const buildConsequenceData = useCallback((c: Consequence): ConsequenceNodeData => {
+    const isPlaceholderNode = c.id.startsWith('placeholder-');
+    const phaseMap: Record<number, ExtendedPhase> = {
+      1: 'first-order', 2: 'second-order', 3: 'third-order', 4: 'complete', 5: 'complete',
+    };
+    return {
+      consequence: c,
+      isGenerating: generationPhase === phaseMap[c.order],
+      isDimmed: !isHighlighted(c),
+      isNewlyExpanded: showNewHighlight && !!c.expandedAt && c.expandedAt === lastExpansionTime,
+      isSelected: activeNodeId === c.id,
+      isEditing: editingNodeId === c.id,
+      isGeneratingChildren: isGeneratingChildrenFor === c.id,
+      isGeneratingIdeas: isGeneratingIdeasFor === c.id,
+      isPlaceholder: isPlaceholderNode,
+      isGenerationInProgress: isGenerationRunning,
+      onClick: handleNodeClick,
+      onStartEdit: handleStartEdit,
+      onSaveEdit: handleSaveEdit,
+      onCancelEdit: handleCancelEdit,
+      onAddChild: handleAddChild,
+      onGenerateChildren: handleGenerateChildren,
+      onGenerateIdeas: handleRadialGenerateIdeas,
+      onDelete: handleRadialDelete,
+    };
+  }, [generationPhase, isHighlighted, showNewHighlight, lastExpansionTime,
+      activeNodeId, editingNodeId, isGeneratingChildrenFor, isGeneratingIdeasFor, isGenerationRunning,
+      handleNodeClick, handleStartEdit, handleSaveEdit, handleCancelEdit,
+      handleAddChild, handleGenerateChildren, handleRadialGenerateIdeas, handleRadialDelete]);
+
+  // ─── STRUCTURAL SYNC — runs when consequences change ───────────
+  // Computes positions for new nodes, removes deleted nodes, rebuilds edges.
+  const prevConsequenceIdsRef = useRef<Set<string>>(new Set());
+
+  const syncGraphStructure = useCallback(() => {
+    const currentIds = new Set(consequences.map(c => c.id));
+    const prevIds = prevConsequenceIdsRef.current;
+
+    // Read current positions from ReactFlow's node state
+    const existingPositions = new Map<string, Position>();
+    for (const n of nodes) {
+      existingPositions.set(n.id, n.position);
+    }
+
+    // Compute layout: new nodes get positions, existing ones keep theirs
+    const layoutPositions = computeRadialLayout(consequences, existingPositions);
+    resolveCollisions(layoutPositions, consequences);
+
+    // Determine which nodes are new vs. existing vs. removed
+    const addedIds = new Set<string>();
+    currentIds.forEach(id => { if (!prevIds.has(id)) addedIds.add(id); });
+    const removedIds = new Set<string>();
+    prevIds.forEach(id => { if (!currentIds.has(id)) removedIds.add(id); });
+
+    // Build the elevated set for z-index
+    const elevatedNodes = getAncestorChain(activeNodeId);
+    const hasElevation = elevatedNodes.size > 0;
+
+    setNodes(prev => {
+      // Remove deleted nodes
+      let updated = prev.filter(n => n.id === 'seed' || currentIds.has(n.id));
+
+      // Update existing nodes' data (not positions)
+      updated = updated.map(n => {
+        if (n.id === 'seed') {
+          return {
+            ...n,
+            zIndex: hasElevation && elevatedNodes.has('seed') ? (activeNodeId === 'seed' ? 1001 : 1000) : undefined,
+            data: {
+              title: input.title,
+              description: input.description,
+              isSelected: activeNodeId === 'seed',
+              isGeneratingChildren: isGeneratingChildrenFor === 'seed',
+              isGenerationInProgress: isGenerationRunning,
+              onClick: handleSeedClick,
+              onAddChild: handleSeedAddChild,
+              onGenerateChildren: handleSeedGenerateChildren,
+            },
+          };
+        }
+        const c = consequences.find(con => con.id === n.id);
+        if (!c) return n;
+        return {
+          ...n,
+          zIndex: hasElevation && elevatedNodes.has(n.id) ? (activeNodeId === n.id ? 1001 : 1000) : undefined,
+          draggable: !c.id.startsWith('placeholder-') && editingNodeId !== c.id,
+          data: buildConsequenceData(c),
+        };
       });
 
-      // IMPROVED: Much larger radii for better spacing
-      // Calculate radii based on number of nodes per order (now only 3 orders)
-      const consequencesByOrder: Record<number, Consequence[]> = {
-        1: filtered.filter((c) => c.order === 1),
-        2: filtered.filter((c) => c.order === 2),
-        3: filtered.filter((c) => c.order === 3),
-        4: filtered.filter((c) => c.order === 4),
-        5: filtered.filter((c) => c.order === 5),
-      };
+      // Add seed if not present
+      if (!updated.find(n => n.id === 'seed')) {
+        updated.unshift({
+          id: 'seed',
+          type: 'seed',
+          position: { x: 0, y: 0 },
+          zIndex: hasElevation && elevatedNodes.has('seed') ? (activeNodeId === 'seed' ? 1001 : 1000) : undefined,
+          data: {
+            title: input.title,
+            description: input.description,
+            isSelected: activeNodeId === 'seed',
+            isGeneratingChildren: isGeneratingChildrenFor === 'seed',
+            isGenerationInProgress: isGenerationRunning,
+            onClick: handleSeedClick,
+            onAddChild: handleSeedAddChild,
+            onGenerateChildren: handleSeedGenerateChildren,
+          },
+        });
+      }
 
-      // Calculate dynamic radii based on node count (more nodes = larger radius)
-      const NODE_WIDTH = 250; // approximate node width
-      const MIN_ARC_SPACING = 30; // minimum pixels between nodes on arc
-
-      const calculateRadius = (nodeCount: number, minRadius: number): number => {
-        if (nodeCount === 0) return minRadius;
-        const circumferenceNeeded = nodeCount * (NODE_WIDTH + MIN_ARC_SPACING);
-        const radiusFromCircumference = circumferenceNeeded / (2 * Math.PI);
-        return Math.max(minRadius, radiusFromCircumference);
-      };
-
-      const orderRadii: Record<number, number> = {
-        1: calculateRadius(consequencesByOrder[1].length, 500),
-        2: calculateRadius(consequencesByOrder[2].length, 900),
-        3: calculateRadius(consequencesByOrder[3].length, 1400),
-        4: calculateRadius(consequencesByOrder[4].length, 1900),
-        5: calculateRadius(consequencesByOrder[5].length, 2400),
-      };
-
-      // Track positions for connecting edges
-      const nodePositions: Record<string, { x: number; y: number }> = {
-        seed: { x: 0, y: 0 },
-      };
-
-      // Place first-order consequences in a circle around the seed
-      consequencesByOrder[1].forEach((c, idx) => {
-        const angle = (idx / consequencesByOrder[1].length) * 2 * Math.PI - Math.PI / 2;
-        const x = Math.cos(angle) * orderRadii[1];
-        const y = Math.sin(angle) * orderRadii[1];
-
-        nodePositions[c.id] = { x, y };
-        const isDimmed = !isHighlighted(c);
-
-        newNodes.push({
+      // Add new consequence nodes
+      for (const c of consequences) {
+        if (!addedIds.has(c.id)) continue;
+        const pos = layoutPositions.get(c.id) || { x: 0, y: 0 };
+        updated.push({
           id: c.id,
           type: 'consequence',
-          position: { x, y },
+          position: pos,
+          draggable: !c.id.startsWith('placeholder-') && editingNodeId !== c.id,
+          zIndex: hasElevation && elevatedNodes.has(c.id) ? (activeNodeId === c.id ? 1001 : 1000) : undefined,
+          data: buildConsequenceData(c),
+        });
+      }
+
+      return updated;
+    });
+
+    // Rebuild edges using current positions (mix of existing + newly computed)
+    const allPositions = new Map<string, Position>();
+    // Start with layout positions for newly added nodes
+    layoutPositions.forEach((pos, id) => allPositions.set(id, pos));
+    // Override with actual ReactFlow positions for existing nodes (preserves drags)
+    existingPositions.forEach((pos, id) => {
+      if (!addedIds.has(id)) allPositions.set(id, pos);
+    });
+
+    setEdges(buildEdges(consequences, allPositions));
+    prevConsequenceIdsRef.current = currentIds;
+  }, [consequences, nodes, input, activeNodeId, editingNodeId,
+      isGeneratingChildrenFor, isGenerationRunning, getAncestorChain,
+      handleSeedClick, handleSeedAddChild, handleSeedGenerateChildren,
+      buildConsequenceData, buildEdges, setNodes, setEdges]);
+
+  // ─── DATA-ONLY UPDATE — runs on UI state changes ───────────────
+  // Updates node data (selection, dimming, z-index) without touching positions.
+  const updateNodeDataOnly = useCallback(() => {
+    const elevatedNodes = getAncestorChain(activeNodeId);
+    const hasElevation = elevatedNodes.size > 0;
+
+    setNodes(prev => prev.map(n => {
+      if (n.id === 'seed') {
+        return {
+          ...n,
+          zIndex: hasElevation && elevatedNodes.has('seed') ? (activeNodeId === 'seed' ? 1001 : 1000) : undefined,
           data: {
-            consequence: c,
-            isGenerating: generationPhase === 'first-order',
-            isDimmed,
-            isNewlyExpanded: showNewHighlight && !!c.expandedAt && c.expandedAt === lastExpansionTime,
-            onClick: setSelectedNodeId,
+            title: input.title,
+            description: input.description,
+            isSelected: activeNodeId === 'seed',
+            isGeneratingChildren: isGeneratingChildrenFor === 'seed',
+            isGenerationInProgress: isGenerationRunning,
+            onClick: handleSeedClick,
+            onAddChild: handleSeedAddChild,
+            onGenerateChildren: handleSeedGenerateChildren,
           },
-        });
+        };
+      }
+      const c = consequences.find(con => con.id === n.id);
+      if (!c) return n;
+      return {
+        ...n,
+        zIndex: hasElevation && elevatedNodes.has(n.id) ? (activeNodeId === n.id ? 1001 : 1000) : undefined,
+        draggable: !c.id.startsWith('placeholder-') && editingNodeId !== c.id,
+        data: buildConsequenceData(c),
+      };
+    }));
 
-        // Calculate optimal handle positions based on node positions
-        const { sourceHandle, targetHandle } = getOptimalHandles(
-          nodePositions['seed'],
-          { x, y }
-        );
-
-        newEdges.push({
-          id: `edge-seed-${c.id}`,
-          source: 'seed',
-          target: c.id,
-          sourceHandle,
-          targetHandle,
-          type: 'default',
+    // Also update edge styling (dimming, animation, z-index)
+    setEdges(prev => {
+      return prev.map(edge => {
+        const c = consequences.find(con => `edge-${con.parentId || 'seed'}-${con.id}` === edge.id);
+        if (!c) return edge;
+        const isDimmed = !isHighlighted(c);
+        const isWildcard = c.probability === 'wildcard';
+        const isSolOrIdea = c.nodeType === 'solution' || c.nodeType === 'idea';
+        const edgeColor = isSolOrIdea ? SOLUTION_COLORS.border : isWildcard ? '#8b5cf6' : getSentimentColors(c.sentiment).border;
+        const phaseMap: Record<number, ExtendedPhase> = {
+          1: 'first-order', 2: 'second-order', 3: 'third-order', 4: 'complete', 5: 'complete',
+        };
+        // Elevate edges whose both endpoints are in the ancestor chain
+        const parentId = c.parentId || 'seed';
+        const isElevated = hasElevation && elevatedNodes.has(parentId) && elevatedNodes.has(c.id);
+        return {
+          ...edge,
+          zIndex: isElevated ? 999 : undefined,
           style: {
-            stroke: getSentimentColors(c.sentiment).border,
-            strokeWidth: isDimmed ? 1 : 2,
-            opacity: isDimmed ? 0.2 : 0.7,
+            stroke: edgeColor,
+            strokeWidth: isDimmed ? 1 : (isElevated ? 3 : 2),
+            strokeDasharray: isSolOrIdea ? '8,4' : isWildcard ? '5,5' : undefined,
+            opacity: isDimmed ? 0.2 : (c.order === 1 ? 0.7 : 0.6),
           },
-          markerEnd: {
-            type: MarkerType.ArrowClosed,
-            color: getSentimentColors(c.sentiment).border,
-            width: 15,
-            height: 15,
-          },
-          animated: generationPhase === 'first-order',
-        });
+          animated: generationPhase === phaseMap[c.order],
+        };
       });
+    });
+  }, [consequences, input, activeNodeId, editingNodeId,
+      isGeneratingChildrenFor, isGeneratingIdeasFor, isGenerationRunning,
+      generationPhase, getAncestorChain, isHighlighted,
+      showNewHighlight, lastExpansionTime,
+      handleSeedClick, handleSeedAddChild, handleSeedGenerateChildren,
+      buildConsequenceData, setNodes, setEdges]);
 
-      // Group higher-order consequences by their parents for better distribution
-      [2, 3, 4, 5].forEach(order => {
-        const orderConsequences = consequencesByOrder[order];
-        if (orderConsequences.length === 0) return;
+  // ─── Edge rebuild on drag stop ──────────────────────────────────
+  const handleNodeDragStop = useCallback((_event: React.MouseEvent, draggedNode: Node) => {
+    // Update the pre-focus snapshot so unfocus restores to the post-drag position
+    if (preFocusPositionsRef.current) {
+      preFocusPositionsRef.current.set(draggedNode.id, { ...draggedNode.position });
+    }
 
-        // Group by parent
-        const byParent: Record<string, Consequence[]> = {};
-        orderConsequences.forEach(c => {
-          const parentId = c.parentId || 'seed';
-          if (!byParent[parentId]) byParent[parentId] = [];
-          byParent[parentId].push(c);
-        });
+    // Recalculate edges connected to the dragged node using its new position
+    setEdges(prev => prev.map(edge => {
+      if (edge.source !== draggedNode.id && edge.target !== draggedNode.id) return edge;
 
-        // Distribute each group around their parent
-        Object.entries(byParent).forEach(([parentId, children]) => {
-          const parentPos = nodePositions[parentId] || { x: 0, y: 0 };
-          const parentAngleFromCenter = Math.atan2(parentPos.y, parentPos.x);
+      // Find the positions of both ends
+      const sourcePos = edge.source === draggedNode.id
+        ? draggedNode.position
+        : (nodes.find(n => n.id === edge.source)?.position || { x: 0, y: 0 });
+      const targetPos = edge.target === draggedNode.id
+        ? draggedNode.position
+        : (nodes.find(n => n.id === edge.target)?.position || { x: 0, y: 0 });
 
-          // Calculate spread angle based on number of children
-          // More children = wider spread
-          const maxSpread = Math.PI / 2; // 90 degrees max
-          const spreadPerChild = Math.min(Math.PI / 6, maxSpread / Math.max(children.length, 1));
+      const { sourceHandle, targetHandle } = getOptimalHandles(sourcePos, targetPos);
+      return { ...edge, sourceHandle, targetHandle };
+    }));
+  }, [nodes, setEdges]);
 
-          children.forEach((c, idx) => {
-            // Distribute children in an arc emanating outward from parent
-            const centerIdx = (children.length - 1) / 2;
-            const offsetFromCenter = idx - centerIdx;
-            const angle = parentAngleFromCenter + offsetFromCenter * spreadPerChild;
+  // ─── Tidy Layout handler ───────────────────────────────────────
+  const handleTidyLayout = useCallback(() => {
+    const freshPositions = computeRadialLayout(consequences);
+    resolveCollisions(freshPositions, consequences);
 
-            // Distance from parent based on order
-            const baseDistance = 350 + (order - 2) * 100;
-            // Add some randomness to prevent perfect alignment
-            const jitter = (Math.sin(idx * 7.3) * 30); // deterministic "random"
-            const distance = baseDistance + jitter;
+    setNodes(prev => prev.map(n => {
+      const pos = freshPositions.get(n.id);
+      if (!pos) return n;
+      return { ...n, position: pos };
+    }));
 
-            const x = parentPos.x + Math.cos(angle) * distance;
-            const y = parentPos.y + Math.sin(angle) * distance;
+    // Rebuild edges with fresh positions
+    setEdges(buildEdges(consequences, freshPositions));
 
-            nodePositions[c.id] = { x, y };
-            const isDimmed = !isHighlighted(c);
+    // Clear focus state since we've reset all positions
+    preFocusPositionsRef.current = null;
+  }, [consequences, buildEdges, setNodes, setEdges]);
 
-            const phaseMap: Record<number, ExtendedPhase> = {
-              2: 'second-order',
-              3: 'third-order',
-              4: 'complete',
-              5: 'complete',
-            };
+  // ─── Effect: structural sync (when consequences change) ────────
+  const prevConsequenceLengthRef = useRef(consequences.length);
+  const prevConsequenceJsonRef = useRef('__uninitialized__');
 
-            newNodes.push({
-              id: c.id,
-              type: 'consequence',
-              position: { x, y },
-              data: {
-                consequence: c,
-                isGenerating: generationPhase === phaseMap[order],
-                isDimmed,
-                isNewlyExpanded: showNewHighlight && !!c.expandedAt && c.expandedAt === lastExpansionTime,
-                onClick: setSelectedNodeId,
-              },
-            });
-
-            if (nodePositions[parentId]) {
-              const isWildcard = c.probability === 'wildcard';
-              const isSolOrIdea = c.nodeType === 'solution' || c.nodeType === 'idea';
-              const edgeColor = isSolOrIdea ? SOLUTION_COLORS.border : isWildcard ? '#8b5cf6' : getSentimentColors(c.sentiment).border;
-
-              // Calculate optimal handle positions
-              const { sourceHandle, targetHandle } = getOptimalHandles(
-                parentPos,
-                { x, y }
-              );
-
-              newEdges.push({
-                id: `edge-${parentId}-${c.id}`,
-                source: parentId,
-                target: c.id,
-                sourceHandle,
-                targetHandle,
-                type: 'default',
-                style: {
-                  stroke: edgeColor,
-                  strokeWidth: isDimmed ? 1 : 2,
-                  strokeDasharray: isSolOrIdea ? '8,4' : isWildcard ? '5,5' : undefined,
-                  opacity: isDimmed ? 0.2 : 0.6,
-                },
-                markerEnd: {
-                  type: MarkerType.ArrowClosed,
-                  color: edgeColor,
-                  width: 12,
-                  height: 12,
-                },
-                animated: generationPhase === phaseMap[order],
-              });
-            }
-          });
-        });
-      });
-
-      setNodes(newNodes);
-      setEdges(newEdges);
-    },
-    [input, generationPhase, setNodes, setEdges, isHighlighted, showNewHighlight, lastExpansionTime]
-  );
-
-  // Update visualization when consequences or highlight filters change
   useEffect(() => {
-    generateNodesAndEdges(consequences, filteredConsequences);
-  }, [consequences, filteredConsequences, generateNodesAndEdges, highlightFilters]);
+    // Build a lightweight fingerprint of consequences to detect structural changes
+    const fingerprint = consequences.map(c => c.id).sort().join(',');
+    if (fingerprint !== prevConsequenceJsonRef.current) {
+      prevConsequenceJsonRef.current = fingerprint;
+      syncGraphStructure();
+    }
+  }, [consequences, syncGraphStructure]);
+
+  // ─── Effect: data-only update (when UI state changes) ──────────
+  useEffect(() => {
+    updateNodeDataOnly();
+  }, [activeNodeId, editingNodeId, isGeneratingChildrenFor, isGeneratingIdeasFor,
+      isGenerationRunning, generationPhase, highlightFilters,
+      showNewHighlight, lastExpansionTime, updateNodeDataOnly]);
+
+  // ─── Effect: focus-path animation (when active node changes) ────
+  useEffect(() => {
+    // Only run when activeNodeId actually changes
+    if (activeNodeId === prevActiveNodeIdRef.current) return;
+    const prevActiveId = prevActiveNodeIdRef.current;
+    prevActiveNodeIdRef.current = activeNodeId;
+
+    // Clear any pending animation timer
+    if (focusAnimTimerRef.current) {
+      clearTimeout(focusAnimTimerRef.current);
+      focusAnimTimerRef.current = null;
+    }
+
+    // Skip during generation — too many nodes changing
+    if (isGenerationRunning) return;
+
+    if (activeNodeId && activeNodeId !== 'seed') {
+      // ── FOCUS: node selected → compute focus positions and animate ──
+      // Save current positions before focus (only if not already saved)
+      if (!preFocusPositionsRef.current) {
+        const savedPositions = new Map<string, Position>();
+        for (const n of nodes) {
+          savedPositions.set(n.id, { ...n.position });
+        }
+        preFocusPositionsRef.current = savedPositions;
+      }
+
+      const ancestorChain = getAncestorChain(activeNodeId);
+      // Use pre-focus (original) positions as the base for computing focus layout,
+      // so switching between focused nodes uses stable original positions
+      const basePositions = preFocusPositionsRef.current || new Map<string, Position>();
+      // Fall back to current positions for any nodes not in the saved set (e.g. newly added)
+      for (const n of nodes) {
+        if (!basePositions.has(n.id)) {
+          basePositions.set(n.id, { ...n.position });
+        }
+      }
+
+      const focusPos = computeFocusPositions(activeNodeId, ancestorChain, consequences, basePositions);
+
+      // Enable CSS transition, then apply positions + focus dimming
+      setFocusAnimClass('focus-animating');
+      requestAnimationFrame(() => {
+        setNodes(prev => prev.map(n => {
+          const pos = focusPos.get(n.id);
+          const isInChain = ancestorChain.has(n.id);
+          const updatedNode = pos ? { ...n, position: pos } : { ...n };
+          // Set isFocusDimmed on non-chain consequence nodes
+          if (n.type === 'consequence' && n.data) {
+            updatedNode.data = { ...n.data, isFocusDimmed: !isInChain };
+          }
+          return updatedNode;
+        }));
+        // Rebuild edges for new positions
+        setEdges(buildEdges(consequences, focusPos));
+      });
+
+      // Remove transition class after animation completes
+      focusAnimTimerRef.current = setTimeout(() => {
+        setFocusAnimClass('');
+        focusAnimTimerRef.current = null;
+      }, 420);
+
+    } else if (prevActiveId && prevActiveId !== 'seed' && preFocusPositionsRef.current) {
+      // ── UNFOCUS: deselected → restore pre-focus positions ──
+      const savedPositions = preFocusPositionsRef.current;
+
+      // Enable unfocus transition, then restore positions + clear dimming
+      setFocusAnimClass('unfocus-animating');
+      requestAnimationFrame(() => {
+        setNodes(prev => prev.map(n => {
+          const pos = savedPositions.get(n.id);
+          const updatedNode = pos ? { ...n, position: pos } : { ...n };
+          // Clear isFocusDimmed on all consequence nodes
+          if (n.type === 'consequence' && n.data) {
+            updatedNode.data = { ...n.data, isFocusDimmed: false };
+          }
+          return updatedNode;
+        }));
+        // Rebuild edges for restored positions
+        setEdges(buildEdges(consequences, savedPositions));
+      });
+
+      // Clear saved positions and transition class after animation
+      focusAnimTimerRef.current = setTimeout(() => {
+        setFocusAnimClass('');
+        preFocusPositionsRef.current = null;
+        focusAnimTimerRef.current = null;
+      }, 320);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeNodeId]);
 
   // Generation flow - using real Claude API or mock data
   useEffect(() => {
-    // Skip if already started, paused, or we have imported data
-    if (generationStarted.current || isPaused || importedData) return;
+    // Skip if already started, paused, manual mode, or we have imported data
+    if (generationStarted.current || isPaused || importedData || manualMode) return;
     generationStarted.current = true;
 
     const runGeneration = async () => {
@@ -474,7 +926,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData }: Futu
     };
 
     runGeneration();
-  }, [input, isPaused, useMockData, importedData]);
+  }, [input, isPaused, useMockData, importedData, manualMode]);
 
   // Retry with mock data
   const handleRetryWithMock = () => {
@@ -779,25 +1231,37 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData }: Futu
 
         {/* Generation Progress */}
         <div className="p-4 border-b border-slate-200">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-semibold text-slate-700">Generation Progress</span>
-            <span className="text-xs text-slate-500">
-              {generationPhase === 'complete' ? `${totalPhases}/${totalPhases}` : `${getPhaseNumber(generationPhase)}/${totalPhases}`}
-            </span>
-          </div>
-          <div className="w-full bg-slate-200 rounded-full h-2 mb-2 overflow-hidden">
-            <div
-              className="bg-seed h-2 rounded-full transition-all duration-500"
-              style={{ width: `${Math.min((getPhaseNumber(generationPhase) / totalPhases) * 100, 100)}%` }}
-            />
-          </div>
-          <div className="text-xs text-slate-500">
-            {generationPhase === 'complete' ? (
-              <span className="text-green-600 font-medium">✓ Analysis complete ({stats.total} consequences)</span>
-            ) : (
-              progressMessage || `Analyzing ${generationPhase}...`
-            )}
-          </div>
+          {manualMode ? (
+            <div className="flex items-center gap-2 text-sm text-slate-600">
+              <Hammer className="w-4 h-4 text-slate-500" />
+              <div>
+                <span className="font-semibold text-slate-700">Manual Mode</span>
+                <p className="text-xs text-slate-500 mt-1">Click the seed node to add children or AI-generate consequences. Click any node for more actions.</p>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-semibold text-slate-700">Generation Progress</span>
+                <span className="text-xs text-slate-500">
+                  {generationPhase === 'complete' ? `${totalPhases}/${totalPhases}` : `${getPhaseNumber(generationPhase)}/${totalPhases}`}
+                </span>
+              </div>
+              <div className="w-full bg-slate-200 rounded-full h-2 mb-2 overflow-hidden">
+                <div
+                  className="bg-seed h-2 rounded-full transition-all duration-500"
+                  style={{ width: `${Math.min((getPhaseNumber(generationPhase) / totalPhases) * 100, 100)}%` }}
+                />
+              </div>
+              <div className="text-xs text-slate-500">
+                {generationPhase === 'complete' ? (
+                  <span className="text-green-600 font-medium">✓ Analysis complete ({stats.total} consequences)</span>
+                ) : (
+                  progressMessage || `Analyzing ${generationPhase}...`
+                )}
+              </div>
+            </>
+          )}
         </div>
 
         {/* TLDR Summary */}
@@ -863,195 +1327,6 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData }: Futu
           </div>
         )}
 
-        {/* Highlight Filters - dims non-matching nodes */}
-        {consequences.length > 0 && (
-          <div className="p-4 border-b border-slate-200">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-sm font-semibold text-slate-700">Highlight Filters</span>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={toggleHighImpact}
-                  className={`flex items-center gap-1 px-2 py-1 text-xs rounded-md transition-colors ${
-                    showHighImpact
-                      ? 'bg-orange-100 text-orange-600 border border-orange-300'
-                      : 'bg-slate-100 text-slate-500 hover:text-slate-700 border border-slate-200'
-                  }`}
-                  title={showHighImpact ? 'Show all nodes' : 'Show only probable/plausible + critical/high'}
-                >
-                  <Zap className="w-3 h-3" />
-                  {showHighImpact ? 'Key Only' : 'Key Only'}
-                </button>
-                <button
-                  onClick={resetFilters}
-                  className="text-xs text-slate-500 hover:text-slate-700"
-                >
-                  Reset
-                </button>
-              </div>
-            </div>
-
-            {/* Importance */}
-            <div className="mb-3">
-              <span className="text-xs text-slate-500 mb-1.5 block flex items-center gap-1">
-                <Star className="w-3 h-3" /> Importance
-              </span>
-              <div className="flex flex-wrap gap-1">
-                {(['critical', 'high', 'medium', 'low'] as Importance[]).map((imp) => (
-                  <button
-                    key={imp}
-                    onClick={() => toggleHighlightImportance(imp)}
-                    className={`px-2 py-1 text-xs rounded-md transition-colors ${
-                      highlightFilters.importance.includes(imp)
-                        ? imp === 'critical' ? 'bg-amber-100 text-amber-700 border border-amber-300'
-                          : imp === 'high' ? 'bg-blue-100 text-blue-700 border border-blue-300'
-                          : 'bg-slate-200 text-slate-700 border border-slate-300'
-                        : 'bg-slate-100 text-slate-400 border border-slate-200'
-                    }`}
-                  >
-                    {imp}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Probability */}
-            <div className="mb-3">
-              <span className="text-xs text-slate-500 mb-1.5 block flex items-center gap-1">
-                <Target className="w-3 h-3" /> Probability
-              </span>
-              <div className="flex flex-wrap gap-1">
-                {(['probable', 'plausible', 'possible', 'wildcard'] as Probability[]).map((prob) => (
-                  <button
-                    key={prob}
-                    onClick={() => toggleHighlightProbability(prob)}
-                    className={`px-2 py-1 text-xs rounded-md transition-colors ${
-                      highlightFilters.probabilities.includes(prob)
-                        ? 'bg-slate-200 text-slate-700 border border-slate-300'
-                        : 'bg-slate-100 text-slate-400 border border-slate-200'
-                    }`}
-                    style={highlightFilters.probabilities.includes(prob) ? {
-                      backgroundColor: `${PROBABILITY_COLORS[prob]}20`,
-                      borderColor: PROBABILITY_COLORS[prob],
-                      color: PROBABILITY_COLORS[prob],
-                    } : {}}
-                  >
-                    {prob}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* STEEP Category */}
-            <div className="mb-3">
-              <span className="text-xs text-slate-500 mb-1.5 block flex items-center gap-1">
-                <Layers className="w-3 h-3" /> Category
-              </span>
-              <div className="flex flex-wrap gap-1">
-                {(['social', 'technological', 'economic', 'environmental', 'political', 'ethical'] as STEEPCategory[]).map((cat) => (
-                  <button
-                    key={cat}
-                    onClick={() => toggleHighlightCategory(cat)}
-                    className={`px-2 py-1 text-xs rounded-md transition-colors ${
-                      highlightFilters.categories.includes(cat)
-                        ? 'border'
-                        : 'bg-slate-100 text-slate-400 border border-slate-200'
-                    }`}
-                    style={highlightFilters.categories.includes(cat) ? {
-                      backgroundColor: `${STEEP_COLORS[cat]}20`,
-                      borderColor: STEEP_COLORS[cat],
-                      color: STEEP_COLORS[cat],
-                    } : {}}
-                  >
-                    {STEEP_LABELS[cat].slice(0, 4)}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Sentiment & Ideas */}
-            <div className="mb-3">
-              <span className="text-xs text-slate-500 mb-1.5 block">Sentiment</span>
-              <div className="flex flex-wrap gap-1">
-                <button
-                  onClick={() => toggleHighlightSentiment('positive')}
-                  className={`px-2 py-1 text-xs rounded-md flex items-center gap-1 transition-colors border ${
-                    highlightFilters.sentiments.includes('positive')
-                      ? ''
-                      : 'bg-slate-100 text-slate-400 border-slate-200'
-                  }`}
-                  style={highlightFilters.sentiments.includes('positive') ? {
-                    backgroundColor: '#e6fff5',
-                    borderColor: '#00d4aa',
-                    color: '#0a6847',
-                  } : {}}
-                >
-                  <TrendingUp className="w-3 h-3" /> +
-                </button>
-                <button
-                  onClick={() => toggleHighlightSentiment('negative')}
-                  className={`px-2 py-1 text-xs rounded-md flex items-center gap-1 transition-colors border ${
-                    highlightFilters.sentiments.includes('negative')
-                      ? ''
-                      : 'bg-slate-100 text-slate-400 border-slate-200'
-                  }`}
-                  style={highlightFilters.sentiments.includes('negative') ? {
-                    backgroundColor: '#fff0f3',
-                    borderColor: '#ff4d6d',
-                    color: '#a4133c',
-                  } : {}}
-                >
-                  <TrendingDown className="w-3 h-3" /> −
-                </button>
-                <button
-                  onClick={() => toggleHighlightSentiment('neutral')}
-                  className={`px-2 py-1 text-xs rounded-md flex items-center gap-1 transition-colors ${
-                    highlightFilters.sentiments.includes('neutral')
-                      ? 'bg-slate-200 text-slate-700 border border-slate-400'
-                      : 'bg-slate-100 text-slate-400 border border-slate-200'
-                  }`}
-                >
-                  <Minus className="w-3 h-3" /> ○
-                </button>
-                <button
-                  onClick={toggleShowIdeas}
-                  className={`px-2 py-1 text-xs rounded-md flex items-center gap-1 transition-colors border ${
-                    highlightFilters.showIdeas
-                      ? ''
-                      : 'bg-slate-100 text-slate-400 border-slate-200'
-                  }`}
-                  style={highlightFilters.showIdeas ? {
-                    backgroundColor: '#fff7e6',
-                    borderColor: '#ff9f1c',
-                    color: '#7a4100',
-                  } : {}}
-                >
-                  <Lightbulb className="w-3 h-3" /> Ideas
-                </button>
-              </div>
-            </div>
-
-            {/* Order */}
-            <div>
-              <span className="text-xs text-slate-500 mb-1.5 block">Order</span>
-              <div className="flex flex-wrap gap-1">
-                {([1, 2, 3, 4, 5].filter(o => consequences.some(c => c.order === o)) as ConsequenceOrder[]).map((ord) => (
-                  <button
-                    key={ord}
-                    onClick={() => toggleHighlightOrder(ord)}
-                    className={`px-2 py-1 text-xs rounded-md transition-colors ${
-                      highlightFilters.orders.includes(ord)
-                        ? 'bg-indigo-100 text-indigo-700 border border-indigo-300'
-                        : 'bg-slate-100 text-slate-400 border border-slate-200'
-                    }`}
-                  >
-                    {ord}°
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Related Subjects Panel */}
         <RelatedSubjects
           subjects={relatedSubjects}
@@ -1077,7 +1352,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData }: Futu
       </div>
 
       {/* Main map area */}
-      <div className="flex-1 relative">
+      <div className={`flex-1 relative ${focusAnimClass} ${activeNodeId && activeNodeId !== 'seed' ? 'has-focus-path' : ''}`}>
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -1085,6 +1360,8 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData }: Futu
           onEdgesChange={onEdgesChange}
           nodeTypes={nodeTypes}
           connectionMode={ConnectionMode.Loose}
+          onPaneClick={handlePaneClick}
+          onNodeDragStop={handleNodeDragStop}
           fitView
           fitViewOptions={{ padding: 0.2 }}
           minZoom={0.1}
@@ -1096,6 +1373,236 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData }: Futu
         >
           <Background color="#e8e8f0" gap={20} />
           <Controls />
+
+          {/* Tidy Layout button */}
+          {generationPhase === 'complete' && consequences.length > 0 && (
+            <div className={`absolute top-4 z-10 ${filterPanelCollapsed ? 'right-16' : 'right-[236px]'}`} style={{ transition: 'right 0.2s ease' }}>
+              <button
+                onClick={handleTidyLayout}
+                className="flex items-center gap-1.5 px-3 py-2 bg-white/95 backdrop-blur-sm rounded-lg shadow-md border border-slate-200 text-xs font-medium text-slate-600 hover:text-slate-900 hover:border-slate-300 transition-colors"
+                title="Reset layout to clean radial arrangement"
+              >
+                <LayoutGrid className="w-3.5 h-3.5" />
+                Tidy Layout
+              </button>
+            </div>
+          )}
+
+          {/* ─── Filter Panel (right side of map) ─── */}
+          {consequences.length > 0 && (
+            <div
+              className="absolute top-0 right-0 bottom-0 z-10 flex"
+              style={{ pointerEvents: 'none' }}
+            >
+              <div
+                className="h-full bg-white shadow-lg border-l border-slate-200 overflow-y-auto"
+                style={{
+                  width: filterPanelCollapsed ? '44px' : '240px',
+                  transition: 'width 0.2s ease',
+                  pointerEvents: 'auto',
+                }}
+              >
+                {/* Collapse toggle */}
+                <div className="sticky top-0 bg-white z-10 border-b border-slate-100">
+                  <button
+                    onClick={() => setFilterPanelCollapsed(prev => !prev)}
+                    className="w-full flex items-center gap-2 px-3 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
+                    title={filterPanelCollapsed ? 'Expand filters' : 'Collapse filters'}
+                  >
+                    <Filter className="w-3.5 h-3.5 flex-shrink-0" />
+                    {!filterPanelCollapsed && (
+                      <>
+                        <span className="flex-1 text-left">Filters</span>
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {filterPanelCollapsed ? (
+                  /* ── Collapsed: icon strip ── */
+                  <div className="flex flex-col items-center gap-1 py-2">
+                    <button onClick={() => setFilterPanelCollapsed(false)} className="p-1.5 rounded-md hover:bg-slate-100 text-slate-500" title="Category"><Layers className="w-4 h-4" /></button>
+                    <button onClick={() => setFilterPanelCollapsed(false)} className="p-1.5 rounded-md hover:bg-slate-100 text-slate-500" title="Sentiment"><TrendingUp className="w-4 h-4" /></button>
+                    <button onClick={() => setFilterPanelCollapsed(false)} className="p-1.5 rounded-md hover:bg-slate-100 text-slate-500" title="Probability"><Target className="w-4 h-4" /></button>
+                    <button onClick={() => setFilterPanelCollapsed(false)} className="p-1.5 rounded-md hover:bg-slate-100 text-slate-500" title="Importance"><Star className="w-4 h-4" /></button>
+                    <div className="w-6 border-t border-slate-200 my-1" />
+                    <button onClick={resetFilters} className="p-1.5 rounded-md hover:bg-slate-100 text-slate-400" title="Reset filters"><X className="w-4 h-4" /></button>
+                  </div>
+                ) : (
+                  /* ── Expanded: full filters ── */
+                  <div className="px-3 py-2 space-y-3">
+                    {/* Quick actions */}
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={toggleHighImpact}
+                        className={`flex items-center gap-1 px-2 py-1 text-[10px] rounded-md transition-colors flex-1 justify-center ${
+                          showHighImpact
+                            ? 'bg-orange-100 text-orange-600 border border-orange-300'
+                            : 'bg-slate-50 text-slate-500 hover:text-slate-700 border border-slate-200'
+                        }`}
+                      >
+                        <Zap className="w-3 h-3" /> Key Only
+                      </button>
+                      <button
+                        onClick={resetFilters}
+                        className="px-2 py-1 text-[10px] text-slate-500 hover:text-slate-700 bg-slate-50 border border-slate-200 rounded-md"
+                      >
+                        Reset
+                      </button>
+                    </div>
+
+                    {/* STEEP Category */}
+                    <div>
+                      <span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium mb-1.5 flex items-center gap-1">
+                        <Layers className="w-3 h-3" /> Category
+                      </span>
+                      <div className="flex flex-col gap-1">
+                        {(['social', 'technological', 'economic', 'environmental', 'political', 'ethical'] as STEEPCategory[]).map((cat) => (
+                          <button
+                            key={cat}
+                            onClick={() => toggleHighlightCategory(cat)}
+                            className={`w-full px-2 py-1 text-[10px] rounded transition-colors text-left flex items-center justify-between ${
+                              highlightFilters.categories.includes(cat) ? 'border' : 'bg-slate-50 text-slate-400 border border-slate-200'
+                            }`}
+                            style={highlightFilters.categories.includes(cat) ? {
+                              backgroundColor: `${STEEP_COLORS[cat]}20`,
+                              borderColor: STEEP_COLORS[cat],
+                              color: STEEP_COLORS[cat],
+                            } : {}}
+                          >
+                            {STEEP_LABELS[cat]} <span className="opacity-60">({stats.byCategory[cat] || 0})</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Sentiment */}
+                    <div>
+                      <span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium mb-1.5 flex items-center gap-1">
+                        Sentiment
+                      </span>
+                      <div className="flex flex-col gap-1">
+                        <button
+                          onClick={() => toggleHighlightSentiment('positive')}
+                          className={`w-full px-2 py-1 text-[10px] rounded flex items-center gap-1.5 transition-colors border text-left ${
+                            highlightFilters.sentiments.includes('positive') ? '' : 'bg-slate-50 text-slate-400 border-slate-200'
+                          }`}
+                          style={highlightFilters.sentiments.includes('positive') ? { backgroundColor: '#e6fff5', borderColor: '#00d4aa', color: '#0a6847' } : {}}
+                        >
+                          <TrendingUp className="w-2.5 h-2.5 flex-shrink-0" /> <span className="flex-1">Positive</span> <span className="opacity-60">({stats.bySentiment.positive})</span>
+                        </button>
+                        <button
+                          onClick={() => toggleHighlightSentiment('negative')}
+                          className={`w-full px-2 py-1 text-[10px] rounded flex items-center gap-1.5 transition-colors border text-left ${
+                            highlightFilters.sentiments.includes('negative') ? '' : 'bg-slate-50 text-slate-400 border-slate-200'
+                          }`}
+                          style={highlightFilters.sentiments.includes('negative') ? { backgroundColor: '#fff0f3', borderColor: '#ff4d6d', color: '#a4133c' } : {}}
+                        >
+                          <TrendingDown className="w-2.5 h-2.5 flex-shrink-0" /> <span className="flex-1">Negative</span> <span className="opacity-60">({stats.bySentiment.negative})</span>
+                        </button>
+                        <button
+                          onClick={() => toggleHighlightSentiment('neutral')}
+                          className={`w-full px-2 py-1 text-[10px] rounded flex items-center gap-1.5 transition-colors text-left ${
+                            highlightFilters.sentiments.includes('neutral')
+                              ? 'bg-slate-200 text-slate-700 border border-slate-400'
+                              : 'bg-slate-50 text-slate-400 border border-slate-200'
+                          }`}
+                        >
+                          <Minus className="w-2.5 h-2.5 flex-shrink-0" /> <span className="flex-1">Neutral</span> <span className="opacity-60">({stats.bySentiment.neutral})</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Probability */}
+                    <div>
+                      <span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium mb-1.5 flex items-center gap-1">
+                        <Target className="w-3 h-3" /> Probability
+                      </span>
+                      <div className="flex flex-col gap-1">
+                        {(['probable', 'plausible', 'possible', 'wildcard'] as Probability[]).map((prob) => (
+                          <button
+                            key={prob}
+                            onClick={() => toggleHighlightProbability(prob)}
+                            className={`w-full px-2 py-1 text-[10px] rounded transition-colors text-left flex items-center justify-between ${
+                              highlightFilters.probabilities.includes(prob) ? 'border' : 'bg-slate-50 text-slate-400 border border-slate-200'
+                            }`}
+                            style={highlightFilters.probabilities.includes(prob) ? {
+                              backgroundColor: `${PROBABILITY_COLORS[prob]}20`,
+                              borderColor: PROBABILITY_COLORS[prob],
+                              color: PROBABILITY_COLORS[prob],
+                            } : {}}
+                          >
+                            <span className="capitalize">{prob}</span> <span className="opacity-60">({stats.byProbability[prob] || 0})</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Importance */}
+                    <div>
+                      <span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium mb-1.5 flex items-center gap-1">
+                        <Star className="w-3 h-3" /> Importance
+                      </span>
+                      <div className="flex flex-col gap-1">
+                        {(['critical', 'high', 'medium', 'low'] as Importance[]).map((imp) => (
+                          <button
+                            key={imp}
+                            onClick={() => toggleHighlightImportance(imp)}
+                            className={`w-full px-2 py-1 text-[10px] rounded transition-colors text-left flex items-center justify-between ${
+                              highlightFilters.importance.includes(imp)
+                                ? imp === 'critical' ? 'bg-amber-100 text-amber-700 border border-amber-300'
+                                  : imp === 'high' ? 'bg-blue-100 text-blue-700 border border-blue-300'
+                                  : 'bg-slate-200 text-slate-700 border border-slate-300'
+                                : 'bg-slate-50 text-slate-400 border border-slate-200'
+                            }`}
+                          >
+                            <span className="capitalize">{imp}</span> <span className="opacity-60">({stats.byImportance[imp] || 0})</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Order */}
+                    <div>
+                      <span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium mb-1.5 flex items-center gap-1">
+                        Order
+                      </span>
+                      <div className="flex flex-col gap-1">
+                        {([1, 2, 3, 4, 5].filter(o => consequences.some(c => c.order === o)) as ConsequenceOrder[]).map((ord) => (
+                          <button
+                            key={ord}
+                            onClick={() => toggleHighlightOrder(ord)}
+                            className={`w-full px-2 py-1 text-[10px] rounded transition-colors text-left flex items-center justify-between ${
+                              highlightFilters.orders.includes(ord)
+                                ? 'bg-indigo-100 text-indigo-700 border border-indigo-300'
+                                : 'bg-slate-50 text-slate-400 border border-slate-200'
+                            }`}
+                          >
+                            {ord === 1 ? '1st Order' : ord === 2 ? '2nd Order' : ord === 3 ? '3rd Order' : `${ord}th Order`} <span className="opacity-60">({stats.byOrder[ord] || 0})</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Ideas toggle */}
+                    <div>
+                      <button
+                        onClick={toggleShowIdeas}
+                        className={`w-full px-1.5 py-1 text-[10px] rounded flex items-center gap-1 justify-center transition-colors border ${
+                          highlightFilters.showIdeas ? '' : 'bg-slate-50 text-slate-400 border-slate-200'
+                        }`}
+                        style={highlightFilters.showIdeas ? { backgroundColor: '#fff7e6', borderColor: '#ff9f1c', color: '#7a4100' } : {}}
+                      >
+                        <Lightbulb className="w-3 h-3" /> Ideas & Solutions <span className="opacity-60">({stats.ideasCount})</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           <MiniMap
             nodeColor={(node) => {
               if (node.type === 'seed') return '#2b6cb0';

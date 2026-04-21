@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { FutureInput, Horizon, HORIZON_LABELS, Consequence, Solution } from '../types';
-import { Sparkles, FileText, Clock, ArrowRight, Upload, X, Loader2, Link, Globe, Zap, Users, Search, BookOpen, Newspaper, FolderOpen } from 'lucide-react';
+import { Sparkles, FileText, Clock, ArrowRight, Upload, X, Loader2, Link, Globe, Zap, Users, Search, BookOpen, Newspaper, FolderOpen, Hammer } from 'lucide-react';
 import { extractTextFromFile, truncateForContext } from '../api/documentParser';
 import { fetchUrlContent } from '../api/claude';
 import { conductWebResearch, formatResearchForPrompt, ResearchSummary } from '../api/webResearch';
@@ -14,9 +14,10 @@ interface ImportedData {
 interface InputFormProps {
   onSubmit: (input: FutureInput) => void;
   onImport?: (data: ImportedData) => void;
+  onManualMode?: (input: FutureInput) => void;
 }
 
-export function InputForm({ onSubmit, onImport }: InputFormProps) {
+export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [horizon, setHorizon] = useState<Horizon>('medium');
@@ -562,23 +563,44 @@ export function InputForm({ onSubmit, onImport }: InputFormProps) {
             )}
           </div>
 
-          <button
-            type="submit"
-            disabled={!title.trim() || isResearching}
-            className="w-full py-4 px-6 bg-seed text-white rounded-xl font-semibold text-lg hover:bg-seed-dark transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-          >
-            {isResearching ? (
-              <>
-                <Loader2 className="w-5 h-5 animate-spin" />
-                Scanning Web Sources...
-              </>
-            ) : (
-              <>
-                Generate Comprehensive Futurescape
-                <ArrowRight className="w-5 h-5" />
-              </>
+          <div className="space-y-3">
+            <button
+              type="submit"
+              disabled={!title.trim() || isResearching}
+              className="w-full py-4 px-6 bg-seed text-white rounded-xl font-semibold text-lg hover:bg-seed-dark transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              {isResearching ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  Scanning Web Sources...
+                </>
+              ) : (
+                <>
+                  Generate Comprehensive Futurescape
+                  <ArrowRight className="w-5 h-5" />
+                </>
+              )}
+            </button>
+
+            {onManualMode && (
+              <button
+                type="button"
+                disabled={!title.trim()}
+                onClick={() => onManualMode({
+                  title,
+                  description: description.trim() || title,
+                  horizon,
+                  perspective: perspective.trim() || undefined,
+                  sourceText,
+                  sourceUrl: sourceUrl || undefined,
+                })}
+                className="w-full py-3 px-6 bg-white border-2 border-slate-300 text-slate-700 rounded-xl font-semibold text-base hover:border-slate-400 hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                <Hammer className="w-5 h-5" />
+                Manual Mode — Build Map by Hand
+              </button>
             )}
-          </button>
+          </div>
 
           <div className="text-center text-sm text-slate-500">
             {enableWebResearch
