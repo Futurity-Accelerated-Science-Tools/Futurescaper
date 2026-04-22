@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { FutureInput, Consequence, Solution } from './types';
+import { useState, useEffect } from 'react';
+import { FutureInput, Consequence, Solution, GenerationConfig, DEFAULT_GENERATION_CONFIG } from './types';
 import { InputForm } from './components/InputForm';
 import { FuturescapeMap } from './components/FuturescapeMap';
 import './index.css';
@@ -15,11 +15,29 @@ function App() {
   const [input, setInput] = useState<FutureInput | null>(null);
   const [importedData, setImportedData] = useState<ImportedData | null>(null);
   const [manualMode, setManualMode] = useState(false);
+  const [generationConfig, setGenerationConfig] = useState<GenerationConfig>(DEFAULT_GENERATION_CONFIG);
 
-  const handleSubmit = (data: FutureInput) => {
+  // Check for embedded export data on mount (from Download HTML export)
+  useEffect(() => {
+    const embeddedScript = document.getElementById('futurescaper-data');
+    if (embeddedScript) {
+      try {
+        const data = JSON.parse(embeddedScript.textContent || '') as ImportedData;
+        if (data.input && data.consequences) {
+          setInput(data.input);
+          setImportedData(data);
+        }
+      } catch (e) {
+        console.warn('Failed to parse embedded Futurescaper data:', e);
+      }
+    }
+  }, []);
+
+  const handleSubmit = (data: FutureInput, config: GenerationConfig) => {
     setManualMode(false);
     setInput(data);
     setImportedData(null);
+    setGenerationConfig(config);
   };
 
   const handleManualMode = (data: FutureInput) => {
@@ -51,6 +69,7 @@ function App() {
       onApiError={() => {}}
       importedData={importedData}
       manualMode={manualMode}
+      generationConfig={generationConfig}
     />
   );
 }

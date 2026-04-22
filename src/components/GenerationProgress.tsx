@@ -1,4 +1,5 @@
 import React from 'react';
+import { Box, Flex, Text, Button } from '@chakra-ui/react';
 import { Loader2, CheckCircle2, Circle } from 'lucide-react';
 
 type Phase = 'idle' | 'first-order' | 'second-order' | 'third-order' | 'complete';
@@ -31,66 +32,76 @@ export function GenerationProgress({ phase, onContinue, onPause, isPaused }: Gen
   if (phase === 'idle') return null;
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="font-semibold text-slate-700">
+    <Box bg="bg.canvas" rounded="xl" shadow="sm" borderWidth="1px" borderColor="border.muted" p={4}>
+      <Flex align="center" justify="space-between" mb={4}>
+        <Text fontWeight="semibold" color="fg">
           {phase === 'complete' ? 'Generation Complete' : 'Generating Map...'}
-        </h3>
+        </Text>
         {phase !== 'complete' && (
-          <div className="flex gap-2">
+          <Flex gap={2}>
             {isPaused ? (
-              <button
+              <Button
                 onClick={onContinue}
-                className="px-3 py-1 text-sm bg-seed text-white rounded-lg hover:bg-seed-dark"
+                size="sm"
+                bg="brand"
+                color="brand.contrast"
+                rounded="lg"
+                _hover={{ bg: 'brand.hover' }}
               >
                 Continue
-              </button>
+              </Button>
             ) : (
-              <button
+              <Button
                 onClick={onPause}
-                className="px-3 py-1 text-sm bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200"
+                size="sm"
+                bg="bg.hover"
+                color="fg"
+                rounded="lg"
+                _hover={{ bg: 'bg.active' }}
               >
                 Pause
-              </button>
+              </Button>
             )}
-          </div>
+          </Flex>
         )}
-      </div>
+      </Flex>
 
-      <div className="space-y-3">
+      <Flex direction="column" gap={3}>
         {phases.map((p) => {
           const status = getPhaseStatus(p.key);
           return (
-            <div key={p.key} className="flex items-center gap-3">
+            <Flex key={p.key} align="center" gap={3}>
               {status === 'complete' ? (
-                <CheckCircle2 className="w-5 h-5 text-positive flex-shrink-0" />
+                <Box as={CheckCircle2} w={5} h={5} color="fg.success" flexShrink={0} />
               ) : status === 'active' ? (
-                <Loader2 className="w-5 h-5 text-seed flex-shrink-0 animate-spin" />
+                <Box as={Loader2} w={5} h={5} color="brand" flexShrink={0} className="animate-spin" />
               ) : (
-                <Circle className="w-5 h-5 text-slate-300 flex-shrink-0" />
+                <Box as={Circle} w={5} h={5} color="fg.muted" flexShrink={0} />
               )}
-              <div>
-                <p className={`text-sm font-medium ${status === 'pending' ? 'text-slate-400' : 'text-slate-700'}`}>
+              <Box>
+                <Text fontSize="sm" fontWeight="medium" color={status === 'pending' ? 'fg.muted' : 'fg'}>
                   {p.label}
-                </p>
-                <p className="text-xs text-slate-500">{p.description}</p>
-              </div>
-            </div>
+                </Text>
+                <Text fontSize="xs" color="fg.secondary">
+                  {p.description}
+                </Text>
+              </Box>
+            </Flex>
           );
         })}
-      </div>
+      </Flex>
 
       {/* Waiting message */}
       {phase !== 'complete' && (
-        <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
-          <p className="text-sm text-amber-800">
-            <strong>☕ This takes 2-4 minutes.</strong> Feel free to switch tabs or grab a coffee — the results will be here when you return!
-          </p>
-          <p className="text-xs text-amber-600 mt-1">
+        <Box mt={4} p={3} bg="warning/10" borderWidth="1px" borderColor="warning/30" rounded="lg">
+          <Text fontSize="sm" color="fg">
+            <strong>This takes 2-4 minutes.</strong> Feel free to switch tabs — the results will be here when you return!
+          </Text>
+          <Text fontSize="xs" color="fg.secondary" mt={1}>
             Analyzing consequences across Social, Technological, Economic, Environmental, and Political dimensions...
-          </p>
-        </div>
+          </Text>
+        </Box>
       )}
-    </div>
+    </Box>
   );
 }

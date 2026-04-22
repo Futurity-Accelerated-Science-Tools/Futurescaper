@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
+import { Box, Flex, Text, Button } from '@chakra-ui/react';
 import ReactFlow, {
   Background,
   Controls,
@@ -10,6 +11,7 @@ import ReactFlow, {
   ConnectionMode,
   MarkerType,
   ReactFlowInstance,
+  BackgroundVariant,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 
@@ -23,22 +25,24 @@ import {
   Probability,
   TimeFrame,
   Importance,
-  getSentimentColors,
-  STEEP_COLORS,
   STEEP_LABELS,
-  PROBABILITY_COLORS,
+  SENTIMENT_SYMBOLS,
   ORDER_LABELS,
   SOLUTION_COLORS,
+  GenerationConfig,
+  DEFAULT_GENERATION_CONFIG,
 } from '../types';
 import { generateComprehensiveFuturescape, hasApiKey, GenerationPhase } from '../api/claude';
 import { generateConsequences } from '../mockData';
 import { ConsequenceNode, SeedNode, ConsequenceNodeData } from './ConsequenceNode';
+import { SteepIcon, getSteepMutedBg, getSteepTextColor } from './SteepIcon';
 import { ExportPanel } from './ExportPanel';
-import { ArrowLeft, AlertCircle, Lightbulb, FileText, Star, Target, Layers, TrendingUp, TrendingDown, Minus, Loader2, X, Send, Sparkles, Zap, Hammer, LayoutGrid, Filter, ChevronRight, ChevronLeft } from 'lucide-react';
+import { ArrowLeft, AlertCircle, Lightbulb, FileText, Star, Target, Layers, TrendingUp, TrendingDown, Minus, Loader2, X, Send, Sparkles, Zap, Hammer, LayoutGrid, Filter, ChevronRight, ChevronLeft, Sun, Moon } from 'lucide-react';
 import { expandNodeConsequences, freePromptExpand, generateSolutionIdeas, generateConsequencesWithAI, generateChildConsequencesWithAI } from '../api/claude';
 import { findRelevantSubjects, RelevantSubject } from '../api/subjects';
 import { RelatedSubjects } from './RelatedSubjects';
 import { computeRadialLayout, resolveCollisions, getOptimalHandles, computeFocusPositions, Position } from '../layout';
+import { useColorMode } from '../theme/ColorModeProvider';
 
 const nodeTypes = {
   seed: SeedNode,
@@ -58,11 +62,13 @@ interface FuturescapeMapProps {
   onApiError?: () => void;
   importedData?: ImportedData | null;
   manualMode?: boolean;
+  generationConfig?: GenerationConfig;
 }
 
-type ExtendedPhase = 'idle' | 'first-order' | 'second-order' | 'third-order' | 'solutions' | 'complete';
+type ExtendedPhase = 'idle' | 'first-order' | 'second-order' | 'third-order' | 'fourth-order' | 'fifth-order' | 'solutions' | 'complete';
 
-export function FuturescapeMap({ input, onBack, onApiError, importedData, manualMode = false }: FuturescapeMapProps) {
+export function FuturescapeMap({ input, onBack, onApiError, importedData, manualMode = false, generationConfig = DEFAULT_GENERATION_CONFIG }: FuturescapeMapProps) {
+  const { colorMode, toggleColorMode } = useColorMode();
   const [consequences, setConsequences] = useState<Consequence[]>(importedData?.consequences || []);
   const [generationPhase, setGenerationPhase] = useState<ExtendedPhase>(importedData ? 'complete' : (manualMode ? 'complete' : 'idle'));
   const [progressMessage, setProgressMessage] = useState<string>('');
@@ -75,6 +81,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
   const [promptText, setPromptText] = useState('');
   const [isPrompting, setIsPrompting] = useState(false);
   const [promptProgress, setPromptProgress] = useState('');
+  const incomingHandleMapRef = useRef<Map<string, string>>(new Map());
   const [showNewHighlight, setShowNewHighlight] = useState(false);
   const [lastExpansionTime, setLastExpansionTime] = useState<number | null>(null);
   const [showHighImpact, setShowHighImpact] = useState(false);
@@ -91,8 +98,24 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
 
   const [isGeneratingIdeasFor, setIsGeneratingIdeasFor] = useState<string | null>(null);
 
+  // Verbosity setting — controls AI text length per node
+  const [verbosity, setVerbosity] = useState<'concise' | 'normal' | 'detailed'>(input.verbosity || 'normal');
+
+  // Merge local verbosity into input for API calls
+  const effectiveInput = useMemo<FutureInput>(
+    () => ({ ...input, verbosity }),
+    [input, verbosity]
+  );
+
   // Computed: is comprehensive generation currently running?
   const isGenerationRunning = generationPhase !== 'complete' && generationPhase !== 'idle';
+
+  // Auto-clear "newly expanded" highlight after 5 seconds
+  useEffect(() => {
+    if (!showNewHighlight) return;
+    const timer = setTimeout(() => setShowNewHighlight(false), 5000);
+    return () => clearTimeout(timer);
+  }, [showNewHighlight, lastExpansionTime]);
 
   // Highlight filters - nodes NOT in these filters get dimmed (not hidden)
   const [highlightFilters, setHighlightFilters] = useState({
@@ -269,14 +292,15 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     setActiveNodeId(null);
   }, []);
 
-  const handleSeedGenerateChildren = useCallback(async () => {
+  const handleSeedGenerateChildren = useCallback(async (count?: number) => {
     setIsGeneratingChildrenFor('seed');
     setActiveNodeId(null);
 
-    // Create 20 placeholder nodes
+    const effectiveCount = count ?? 6;
+    // Create placeholder nodes
     const placeholderIds: string[] = [];
     const placeholders: Consequence[] = [];
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < effectiveCount; i++) {
       const id = `placeholder-${Date.now()}-${i}`;
       placeholderIds.push(id);
       placeholders.push({
@@ -291,7 +315,9 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     setConsequences(prev => [...prev, ...placeholders]);
 
     try {
-      const realConsequences = await generateConsequencesWithAI(input, 1, []);
+      // Pass existing first-order children so the AI avoids duplicates
+      const existingFirstOrder = consequences.filter(c => c.order === 1 && c.parentId === 'seed' && c.text);
+      const realConsequences = await generateConsequencesWithAI(effectiveInput, 1, existingFirstOrder, effectiveCount);
       setConsequences(prev => [
         ...prev.filter(c => !placeholderIds.includes(c.id)),
         ...realConsequences,
@@ -302,7 +328,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       setError((err as Error).message);
     }
     setIsGeneratingChildrenFor(null);
-  }, [input]);
+  }, [effectiveInput, consequences]);
 
   const handleAddChild = useCallback((parentId: string) => {
     const parent = consequenceMap.get(parentId);
@@ -324,18 +350,19 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     setActiveNodeId(null);
   }, [consequences]);
 
-  const handleGenerateChildren = useCallback(async (parentId: string) => {
+  const handleGenerateChildren = useCallback(async (parentId: string, count?: number) => {
     const parent = consequenceMap.get(parentId);
     if (!parent) return;
 
     setIsGeneratingChildrenFor(parentId);
     setActiveNodeId(null);
 
-    // Create 3 placeholder nodes
+    // Create placeholder nodes matching requested count
+    const effectiveCount = count ?? 3;
     const newOrder = Math.min(parent.order + 1, 5) as ConsequenceOrder;
     const placeholderIds: string[] = [];
     const placeholders: Consequence[] = [];
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < effectiveCount; i++) {
       const id = `placeholder-${Date.now()}-${i}`;
       placeholderIds.push(id);
       placeholders.push({
@@ -350,7 +377,9 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     setConsequences(prev => [...prev, ...placeholders]);
 
     try {
-      const realConsequences = await generateChildConsequencesWithAI(input, parent);
+      // Pass existing children of this parent so the AI avoids duplicates
+      const existingSiblings = consequences.filter(c => c.parentId === parentId && c.text);
+      const realConsequences = await generateChildConsequencesWithAI(effectiveInput, parent, effectiveCount, existingSiblings);
       setConsequences(prev => [
         ...prev.filter(c => !placeholderIds.includes(c.id)),
         ...realConsequences,
@@ -361,20 +390,21 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       setError((err as Error).message);
     }
     setIsGeneratingChildrenFor(null);
-  }, [consequences, input]);
+  }, [consequences, effectiveInput]);
 
-  const handleRadialGenerateIdeas = useCallback(async (nodeId: string) => {
+  const handleRadialGenerateIdeas = useCallback(async (nodeId: string, count?: number) => {
     const targetNode = consequenceMap.get(nodeId);
     if (!targetNode) return;
 
     setIsGeneratingIdeasFor(nodeId);
     setActiveNodeId(null);
 
-    // Create 2 placeholder nodes for ideas
+    // Create placeholder nodes for ideas matching requested count
+    const effectiveCount = count ?? 2;
     const newOrder = Math.min(targetNode.order + 1, 5) as ConsequenceOrder;
     const placeholderIds: string[] = [];
     const placeholders: Consequence[] = [];
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < effectiveCount; i++) {
       const id = `placeholder-${Date.now()}-${i}`;
       placeholderIds.push(id);
       placeholders.push({
@@ -390,7 +420,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
 
     try {
       const expandTime = Date.now();
-      const newIdeas = await generateSolutionIdeas(input, targetNode, consequences);
+      const newIdeas = await generateSolutionIdeas(effectiveInput, targetNode, consequences, effectiveCount);
       const stamped = newIdeas.map(c => ({ ...c, expandedAt: expandTime }));
       setConsequences(prev => [
         ...prev.filter(c => !placeholderIds.includes(c.id)),
@@ -404,7 +434,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       setError((err as Error).message);
     }
     setIsGeneratingIdeasFor(null);
-  }, [consequences, input]);
+  }, [consequences, effectiveInput]);
 
   const handleRadialDelete = useCallback((id: string) => {
     // Recursively find all descendants
@@ -541,13 +571,18 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     positionMap: Map<string, Position>,
   ): Edge[] => {
     const newEdges: Edge[] = [];
+    const handleMap = new Map<string, string>();
     const phaseMap: Record<number, ExtendedPhase> = {
-      1: 'first-order', 2: 'second-order', 3: 'third-order', 4: 'complete', 5: 'complete',
+      1: 'first-order', 2: 'second-order', 3: 'third-order', 4: 'solutions', 5: 'solutions',
     };
 
     // Compute ancestor chain for z-index elevation
     const elevatedNodes = getAncestorChain(activeNodeId);
     const hasElevation = elevatedNodes.size > 0;
+
+    const sentimentEdgeColors: Record<string, string> = { positive: '#22c55e', negative: '#ef4444', neutral: '#94a3b8' };
+    // Idea/solution edges: opposite of bg — concrete color for SVG compatibility
+    const ideaEdgeColor = colorMode === 'dark' ? '#e0e0e0' : '#1B1B1D';
 
     for (const c of allConsequences) {
       const parentId = c.parentId || 'seed';
@@ -556,10 +591,11 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       if (!parentPos || !childPos) continue;
 
       const isDimmed = !isHighlighted(c);
-      const isWildcard = c.probability === 'wildcard';
       const isSolOrIdea = c.nodeType === 'solution' || c.nodeType === 'idea';
-      const edgeColor = isSolOrIdea ? SOLUTION_COLORS.border : isWildcard ? '#8b5cf6' : getSentimentColors(c.sentiment).border;
+      // Idea edges: opposite of bg (fg color). All others: target sentiment color.
+      const edgeColor = isSolOrIdea ? ideaEdgeColor : sentimentEdgeColors[c.sentiment] || '#94a3b8';
       const { sourceHandle, targetHandle } = getOptimalHandles(parentPos, childPos);
+      handleMap.set(c.id, targetHandle);
       const isElevated = hasElevation && elevatedNodes.has(parentId) && elevatedNodes.has(c.id);
 
       newEdges.push({
@@ -572,31 +608,33 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
         zIndex: isElevated ? 999 : undefined,
         style: {
           stroke: edgeColor,
-          strokeWidth: isDimmed ? 1 : (isElevated ? 4 : 2),
-          strokeDasharray: isSolOrIdea ? '8,4' : isWildcard ? '5,5' : undefined,
+          strokeWidth: isDimmed ? 1.5 : (isElevated ? 5 : 3),
+          // All edges solid — no dashing for wildcards or ideas
           opacity: isDimmed ? 0.15 : (isElevated ? 1 : (c.order === 1 ? 0.7 : 0.6)),
         },
         markerEnd: {
           type: MarkerType.ArrowClosed,
           color: edgeColor,
-          width: isElevated ? 18 : (c.order === 1 ? 15 : 12),
-          height: isElevated ? 18 : (c.order === 1 ? 15 : 12),
+          width: isElevated ? 24 : (c.order === 1 ? 20 : 16),
+          height: isElevated ? 24 : (c.order === 1 ? 20 : 16),
         },
-        animated: generationPhase === phaseMap[c.order],
+        animated: c.id.startsWith('placeholder-') || (generationPhase !== 'complete' && generationPhase !== 'idle' && generationPhase === phaseMap[c.order]),
       });
     }
+    incomingHandleMapRef.current = handleMap;
     return newEdges;
-  }, [isHighlighted, generationPhase, getAncestorChain, activeNodeId]);
+  }, [isHighlighted, generationPhase, getAncestorChain, activeNodeId, colorMode]);
 
   // ─── Build data object for a single consequence node ───────────
   const buildConsequenceData = useCallback((c: Consequence): ConsequenceNodeData => {
     const isPlaceholderNode = c.id.startsWith('placeholder-');
     const phaseMap: Record<number, ExtendedPhase> = {
-      1: 'first-order', 2: 'second-order', 3: 'third-order', 4: 'complete', 5: 'complete',
+      1: 'first-order', 2: 'second-order', 3: 'third-order', 4: 'solutions', 5: 'solutions',
     };
     return {
       consequence: c,
-      isGenerating: generationPhase === phaseMap[c.order],
+      // Only pulse during active generation phases, never during 'complete'
+      isGenerating: generationPhase !== 'complete' && generationPhase !== 'idle' && generationPhase === phaseMap[c.order],
       isDimmed: !isHighlighted(c),
       isNewlyExpanded: showNewHighlight && !!c.expandedAt && c.expandedAt === lastExpansionTime,
       isSelected: activeNodeId === c.id,
@@ -605,6 +643,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       isGeneratingIdeas: isGeneratingIdeasFor === c.id,
       isPlaceholder: isPlaceholderNode,
       isGenerationInProgress: isGenerationRunning,
+      incomingHandle: incomingHandleMapRef.current.get(c.id),
       onClick: handleNodeClick,
       onStartEdit: handleStartEdit,
       onSaveEdit: handleSaveEdit,
@@ -634,7 +673,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     }
 
     // Compute layout: new nodes get positions, existing ones keep theirs
-    const layoutPositions = computeRadialLayout(consequences, existingPositions);
+    const layoutPositions = computeRadialLayout(consequences, existingPositions, false, verbosity);
     resolveCollisions(layoutPositions, consequences);
 
     // Determine which nodes are new vs. existing vs. removed
@@ -703,12 +742,16 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       for (const c of consequences) {
         if (!addedIds.has(c.id)) continue;
         const pos = layoutPositions.get(c.id) || { x: 0, y: 0 };
+        // Newly added nodes get elevated z-index so they appear in front of parents
+        const isEditing = editingNodeId === c.id;
+        const elevatedZ = hasElevation && elevatedNodes.has(c.id) ? (activeNodeId === c.id ? 1001 : 1000) : undefined;
+        const newNodeZ = isEditing ? 1002 : 900; // editing nodes on top, new nodes above default
         updated.push({
           id: c.id,
           type: 'consequence',
           position: pos,
-          draggable: !c.id.startsWith('placeholder-') && editingNodeId !== c.id,
-          zIndex: hasElevation && elevatedNodes.has(c.id) ? (activeNodeId === c.id ? 1001 : 1000) : undefined,
+          draggable: !c.id.startsWith('placeholder-') && !isEditing,
+          zIndex: elevatedZ ?? newNodeZ,
           data: buildConsequenceData(c),
         });
       }
@@ -725,19 +768,27 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       if (!addedIds.has(id)) allPositions.set(id, pos);
     });
 
-    setEdges(buildEdges(consequences, allPositions));
+    const builtEdges = buildEdges(consequences, allPositions);
+    setEdges(builtEdges);
     prevConsequenceIdsRef.current = currentIds;
 
-    // If new nodes were added, zoom to fit all nodes after a short delay
+    // If new nodes were added, re-set edges after a tick so ReactFlow
+    // can measure the new DOM nodes and render the edge paths correctly.
     if (addedIds.size > 0) {
+      requestAnimationFrame(() => setEdges(buildEdges(consequences, allPositions)));
       setTimeout(() => {
-        reactFlowInstanceRef.current?.fitView({ padding: 0.2, duration: 400 });
+        const addedNodeIds = Array.from(addedIds);
+        reactFlowInstanceRef.current?.fitView({
+          padding: 0.3,
+          duration: 400,
+          nodes: addedNodeIds.map(id => ({ id })) as any,
+        });
       }, 100);
     }
   }, [consequences, consequenceMap, input, activeNodeId, editingNodeId,
       isGeneratingChildrenFor, isGenerationRunning, getAncestorChain,
       handleSeedClick, handleSeedAddChild, handleSeedGenerateChildren,
-      buildConsequenceData, buildEdges, setNodes, setEdges]);
+      buildConsequenceData, buildEdges, setNodes, setEdges, verbosity]);
 
   // ─── DATA-ONLY UPDATE — runs on UI state changes ───────────────
   // Updates node data (selection, dimming, z-index) without touching positions.
@@ -764,10 +815,12 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       }
       const c = consequenceMap.get(n.id);
       if (!c) return n;
+      const isEditingThis = editingNodeId === c.id;
+      const chainZ = hasElevation && elevatedNodes.has(n.id) ? (activeNodeId === n.id ? 1001 : 1000) : undefined;
       return {
         ...n,
-        zIndex: hasElevation && elevatedNodes.has(n.id) ? (activeNodeId === n.id ? 1001 : 1000) : undefined,
-        draggable: !c.id.startsWith('placeholder-') && editingNodeId !== c.id,
+        zIndex: isEditingThis ? 1002 : chainZ,
+        draggable: !c.id.startsWith('placeholder-') && !isEditingThis,
         data: buildConsequenceData(c),
       };
     }));
@@ -789,7 +842,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
         const isDimmed = !isHighlighted(c);
         const isWildcard = c.probability === 'wildcard';
         const isSolOrIdea = c.nodeType === 'solution' || c.nodeType === 'idea';
-        const edgeColor = isSolOrIdea ? SOLUTION_COLORS.border : isWildcard ? '#8b5cf6' : getSentimentColors(c.sentiment).border;
+        const edgeColor = isSolOrIdea ? '#0005e9' : isWildcard ? '#8b5cf6' : 'var(--chakra-colors-fg-muted, #94a3b8)';
         // Elevate edges whose both endpoints are in the ancestor chain
         const parentId = c.parentId || 'seed';
         const isElevated = hasElevation && elevatedNodes.has(parentId) && elevatedNodes.has(c.id);
@@ -857,7 +910,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
 
   // ─── Tidy Layout handler ───────────────────────────────────────
   const handleTidyLayout = useCallback(() => {
-    const freshPositions = computeRadialLayout(consequences);
+    const freshPositions = computeRadialLayout(consequences, undefined, true, verbosity);
     resolveCollisions(freshPositions, consequences);
 
     setNodes(prev => prev.map(n => {
@@ -1059,7 +1112,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     const runGeneration = async () => {
       if (hasApiKey() && !useMockData) {
         try {
-          const result = await generateComprehensiveFuturescape(input, {
+          const result = await generateComprehensiveFuturescape(effectiveInput, {
             onPhaseStart: (phase: GenerationPhase) => {
               setGenerationPhase(phase as ExtendedPhase);
             },
@@ -1076,7 +1129,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
               setError(err.message);
               // Don't navigate away - just show the error
             },
-          });
+          }, generationConfig);
           // Solutions are now part of consequences array as nodeType: 'solution'|'idea'
           setGenerationPhase('complete');
         } catch (err) {
@@ -1120,7 +1173,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     subjectsRequested.current = true;
     setIsLoadingSubjects(true);
 
-    findRelevantSubjects(input, consequences)
+    findRelevantSubjects(effectiveInput, consequences)
       .then(subjects => {
         setRelatedSubjects(subjects);
       })
@@ -1136,7 +1189,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     subjectsRequested.current = false;
     setRelatedSubjects([]);
     setIsLoadingSubjects(true);
-    findRelevantSubjects(input, consequences)
+    findRelevantSubjects(effectiveInput, consequences)
       .then(subjects => setRelatedSubjects(subjects))
       .catch(err => console.error('Failed to find related subjects:', err))
       .finally(() => setIsLoadingSubjects(false));
@@ -1271,7 +1324,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     setIsGeneratingIdeas(true);
     try {
       const expandTime = Date.now();
-      const newIdeas = await generateSolutionIdeas(input, targetNode, consequences);
+      const newIdeas = await generateSolutionIdeas(effectiveInput, targetNode, consequences);
       const stamped = newIdeas.map(c => ({ ...c, expandedAt: expandTime }));
       setConsequences(prev => [...prev, ...stamped]);
       setLastExpansionTime(expandTime);
@@ -1292,7 +1345,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     try {
       const expandTime = Date.now();
       const newConsequences = await freePromptExpand(
-        input,
+        effectiveInput,
         consequences,
         promptText.trim(),
         (msg) => setPromptProgress(msg)
@@ -1319,157 +1372,269 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
   const totalPhases = 4;
 
   return (
-    <div className="h-screen flex">
+    <Flex direction="column" h="100vh">
+      {/* Header bar */}
+      <Flex
+        h="40px"
+        px={4}
+        align="center"
+        justify="space-between"
+        bg="bg.canvas"
+        borderBottom="1px solid"
+        borderColor="border.muted"
+        flexShrink={0}
+      >
+        <Text fontSize="xs" fontWeight="semibold" color="fg.muted" letterSpacing="wider" textTransform="uppercase">
+          Futurescaper
+        </Text>
+        <Box
+          as="button"
+          onClick={toggleColorMode}
+          p={1.5}
+          rounded="md"
+          color="fg.muted"
+          _hover={{ color: 'fg', bg: 'bg.hover' }}
+          transition="all 0.15s"
+          title={colorMode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+        >
+          {colorMode === 'light' ? <Moon style={{ width: 14, height: 14 }} /> : <Sun style={{ width: 14, height: 14 }} />}
+        </Box>
+      </Flex>
+
+      {/* Existing content */}
+      <Flex flex={1} minH={0}>
       {/* Left sidebar */}
-      <div className="w-80 bg-white border-r border-slate-200 flex flex-col overflow-y-auto">
-        <div className="p-4 border-b border-slate-200">
-          <button
+      <Flex direction="column" flexShrink={0} p={3} pr={0}>
+      <Flex
+        w="300px"
+        bg="bg.canvas"
+        borderWidth="1px"
+        borderColor="border.emphasized"
+        rounded="xl"
+        direction="column"
+        overflowY="auto"
+        overflowX="hidden"
+        h="100%"
+      >
+        <Box p={4} borderBottom="1px solid" borderColor="border.muted">
+          <Flex
+            as="button"
             onClick={onBack}
-            className="flex items-center gap-2 text-slate-600 hover:text-slate-900 mb-4"
+            align="center"
+            gap={2}
+            color="fg.secondary"
+            _hover={{ color: 'fg' }}
+            mb={4}
           >
-            <ArrowLeft className="w-4 h-4" />
+            <ArrowLeft style={{ width: 16, height: 16 }} />
             Back
-          </button>
-          <h2 className="font-bold text-slate-900 mb-1">{input.title}</h2>
-          <p className="text-sm text-slate-600 max-h-32 overflow-y-auto">{input.description}</p>
-        </div>
+          </Flex>
+          <Text fontWeight="bold" color="fg" mb={1}>{input.title}</Text>
+          <Text fontSize="sm" color="fg.secondary" maxH="128px" overflowY="auto">{input.description}</Text>
+        </Box>
+
+        {/* Verbosity Toggle */}
+        <Box p={4} borderBottom="1px solid" borderColor="border.muted">
+          <Text fontSize="xs" fontWeight="semibold" color="fg.muted" mb={2}>AI Verbosity</Text>
+          <Flex gap={1}>
+            {(['concise', 'normal', 'detailed'] as const).map((v) => (
+              <Box
+                key={v}
+                as="button"
+                onClick={() => setVerbosity(v)}
+                flex={1}
+                py={1}
+                px={2}
+                rounded="md"
+                borderWidth="1px"
+                textAlign="center"
+                fontSize="xs"
+                fontWeight={verbosity === v ? 'semibold' : 'normal'}
+                cursor="pointer"
+                transition="all 0.15s"
+                borderColor={verbosity === v ? 'brand/40' : 'border.muted'}
+                bg={verbosity === v ? 'brand/12' : 'transparent'}
+                color={verbosity === v ? 'fg' : 'fg.muted'}
+                _hover={verbosity !== v ? { bg: 'bg.hover' } : undefined}
+              >
+                {v.charAt(0).toUpperCase() + v.slice(1)}
+              </Box>
+            ))}
+          </Flex>
+        </Box>
 
         {error && (
-          <div className="p-4 bg-red-50 border-b border-red-200">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
-              <div>
-                <h3 className="font-semibold text-red-900">Generation Error</h3>
-                <p className="text-sm text-red-700 mt-1">{error}</p>
-                <div className="flex gap-2 mt-3">
+          <Box p={4} bg="error/8" borderBottom="1px solid" borderColor="error/20">
+            <Flex align="start" gap={3}>
+              <Box as={AlertCircle} w="20px" h="20px" color="fg.error" flexShrink={0} mt="2px" />
+              <Box>
+                <Text fontWeight="semibold" color="fg.error">Generation Error</Text>
+                <Text fontSize="sm" color="fg.error" mt={1}>{error}</Text>
+                <Flex gap={2} mt={3}>
                   {(error.toLowerCase().includes('api key') ||
                     error.toLowerCase().includes('authentication') ||
                     error.toLowerCase().includes('invalid') ||
                     error.toLowerCase().includes('401') ||
                     error.toLowerCase().includes('unauthorized')) && onApiError && (
-                    <button
+                    <Button
                       onClick={onApiError}
-                      className="px-3 py-1.5 text-sm bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors"
+                      size="sm"
+                      bg="warning"
+                      color="brand.contrast"
+                      rounded="lg"
+                      _hover={{ opacity: 0.9 }}
                     >
                       Change API Key
-                    </button>
+                    </Button>
                   )}
-                  <button
+                  <Button
                     onClick={handleRetryWithMock}
-                    className="px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+                    size="sm"
+                    bg="fg.error"
+                    color="brand.contrast"
+                    rounded="lg"
+                    _hover={{ opacity: 0.9 }}
                   >
                     Use Demo Mode
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
+                  </Button>
+                </Flex>
+              </Box>
+            </Flex>
+          </Box>
         )}
 
         {/* Generation Progress */}
-        <div className="p-4 border-b border-slate-200">
+        <Box p={4} borderBottom="1px solid" borderColor="border.muted">
           {manualMode ? (
-            <div className="flex items-center gap-2 text-sm text-slate-600">
-              <Hammer className="w-4 h-4 text-slate-500" />
-              <div>
-                <span className="font-semibold text-slate-700">Manual Mode</span>
-                <p className="text-xs text-slate-500 mt-1">Click the seed node to add children or AI-generate consequences. Click any node for more actions.</p>
-              </div>
-            </div>
+            <Flex align="center" gap={2} fontSize="sm" color="fg.secondary">
+              <Box as={Hammer} w="16px" h="16px" color="fg.muted" />
+              <Box>
+                <Text fontWeight="semibold" color="fg.secondary">Manual Mode</Text>
+                <Text fontSize="xs" color="fg.muted" mt={1}>Click the seed node to add children or AI-generate consequences. Click any node for more actions.</Text>
+              </Box>
+            </Flex>
           ) : (
             <>
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-semibold text-slate-700">Generation Progress</span>
-                <span className="text-xs text-slate-500">
+              <Flex align="center" justify="space-between" mb={2}>
+                <Text fontSize="sm" fontWeight="semibold" color="fg.secondary">Generation Progress</Text>
+                <Text fontSize="xs" color="fg.muted">
                   {generationPhase === 'complete' ? `${totalPhases}/${totalPhases}` : `${getPhaseNumber(generationPhase)}/${totalPhases}`}
-                </span>
-              </div>
-              <div className="w-full bg-slate-200 rounded-full h-2 mb-2 overflow-hidden">
-                <div
-                  className="bg-seed h-2 rounded-full transition-all duration-500"
+                </Text>
+              </Flex>
+              <Box w="100%" bg="bg.active" rounded="full" h="8px" mb={2} overflow="hidden">
+                <Box
+                  bg="brand"
+                  h="8px"
+                  rounded="full"
+                  transition="all 0.5s"
                   style={{ width: `${Math.min((getPhaseNumber(generationPhase) / totalPhases) * 100, 100)}%` }}
                 />
-              </div>
-              <div className="text-xs text-slate-500">
+              </Box>
+              <Box fontSize="xs" color="fg.muted">
                 {generationPhase === 'complete' ? (
-                  <span className="text-green-600 font-medium">✓ Analysis complete ({stats.total} consequences)</span>
+                  <Text as="span" color="fg.success" fontWeight="medium">✓ Analysis complete ({stats.total} consequences)</Text>
                 ) : (
                   progressMessage || `Analyzing ${generationPhase}...`
                 )}
-              </div>
+              </Box>
             </>
           )}
-        </div>
+        </Box>
 
         {/* TLDR Summary */}
         {tldrSummary && generationPhase === 'complete' && (
-          <div className="p-4 border-b border-slate-200">
-            <button
+          <Box p={4} borderBottom="1px solid" borderColor="border.muted">
+            <Flex
+              as="button"
               onClick={() => setShowTLDR(!showTLDR)}
-              className="flex items-center gap-2 w-full text-left mb-2"
+              align="center"
+              gap={2}
+              w="100%"
+              textAlign="left"
+              mb={2}
             >
-              <FileText className="w-4 h-4 text-seed" />
-              <span className="text-sm font-semibold text-slate-700">TL;DR Summary</span>
-              <span className="ml-auto text-xs text-slate-400">{showTLDR ? '▼' : '▶'}</span>
-            </button>
+              <Box as={FileText} w="16px" h="16px" color="brand" />
+              <Text fontSize="sm" fontWeight="semibold" color="fg.secondary">TL;DR Summary</Text>
+              <Text ml="auto" fontSize="xs" color="fg.muted">{showTLDR ? '▼' : '▶'}</Text>
+            </Flex>
             {showTLDR && (
-              <div className="space-y-3 text-sm">
-                <div className="bg-slate-50 rounded-lg p-3">
-                  <p className="text-slate-700 mb-2">
+              <Flex direction="column" gap={3} fontSize="sm">
+                <Box bg="bg.hover" rounded="lg" p={3}>
+                  <Text color="fg.secondary" mb={2}>
                     <strong>{tldrSummary.totalConsequences}</strong> consequences identified:
-                    {' '}<span className="text-red-600">{tldrSummary.negativePercent}% concerning</span>,
-                    {' '}<span className="text-green-600">{tldrSummary.positivePercent}% positive</span>
+                    {' '}<Text as="span" color="fg.error">{tldrSummary.negativePercent}% concerning</Text>,
+                    {' '}<Text as="span" color="fg.success">{tldrSummary.positivePercent}% positive</Text>
                     {tldrSummary.criticalCount > 0 && (
-                      <span className="text-amber-600"> ({tldrSummary.criticalCount} critical)</span>
+                      <Text as="span" color="warning"> ({tldrSummary.criticalCount} critical)</Text>
                     )}
-                  </p>
+                  </Text>
                   {tldrSummary.dominantCategory && (
-                    <p className="text-slate-600 text-xs">
-                      Primary impact area: <span className="font-medium">{STEEP_LABELS[tldrSummary.dominantCategory]}</span>
-                    </p>
+                    <Text color="fg.secondary" fontSize="xs">
+                      Primary impact area: <Text as="span" fontWeight="medium">{STEEP_LABELS[tldrSummary.dominantCategory]}</Text>
+                    </Text>
                   )}
-                </div>
+                </Box>
 
                 {tldrSummary.topConcerns.length > 0 && (
-                  <div>
-                    <h4 className="text-xs font-semibold text-red-700 mb-1.5 flex items-center gap-1">
-                      <TrendingDown className="w-3 h-3" /> Top Concerns
-                    </h4>
-                    <ul className="space-y-2">
+                  <Box>
+                    <Flex as="h4" fontSize="xs" fontWeight="semibold" color="fg.error" mb="6px" align="center" gap={1}>
+                      <TrendingDown style={{ width: 12, height: 12 }} /> Top Concerns
+                    </Flex>
+                    <Flex direction="column" gap={2}>
                       {tldrSummary.topConcerns.map((c) => (
-                        <li
+                        <Box
+                          as="li"
                           key={c.id}
                           onClick={() => setActiveNodeId(c.id)}
-                          className="text-xs text-slate-600 pl-3 border-l-2 border-red-200 leading-relaxed cursor-pointer hover:text-slate-900 hover:border-red-400 transition-colors"
+                          fontSize="xs"
+                          color="fg.secondary"
+                          pl={3}
+                          borderLeft="2px solid"
+                          borderColor="error/20"
+                          lineHeight="relaxed"
+                          cursor="pointer"
+                          _hover={{ color: 'fg', borderColor: 'fg.error' }}
+                          transition="colors"
+                          listStyleType="none"
                         >
                           {c.text}
-                        </li>
+                        </Box>
                       ))}
-                    </ul>
-                  </div>
+                    </Flex>
+                  </Box>
                 )}
 
                 {tldrSummary.topOpportunities.length > 0 && (
-                  <div>
-                    <h4 className="text-xs font-semibold text-green-700 mb-1.5 flex items-center gap-1">
-                      <TrendingUp className="w-3 h-3" /> Top Opportunities
-                    </h4>
-                    <ul className="space-y-2">
+                  <Box>
+                    <Flex as="h4" fontSize="xs" fontWeight="semibold" color="fg.success" mb="6px" align="center" gap={1}>
+                      <TrendingUp style={{ width: 12, height: 12 }} /> Top Opportunities
+                    </Flex>
+                    <Flex direction="column" gap={2}>
                       {tldrSummary.topOpportunities.map((c) => (
-                        <li
+                        <Box
+                          as="li"
                           key={c.id}
                           onClick={() => setActiveNodeId(c.id)}
-                          className="text-xs text-slate-600 pl-3 border-l-2 border-green-200 leading-relaxed cursor-pointer hover:text-slate-900 hover:border-green-400 transition-colors"
+                          fontSize="xs"
+                          color="fg.secondary"
+                          pl={3}
+                          borderLeft="2px solid"
+                          borderColor="fg.success"
+                          lineHeight="relaxed"
+                          cursor="pointer"
+                          _hover={{ color: 'fg', borderColor: 'fg.success' }}
+                          transition="colors"
+                          listStyleType="none"
                         >
                           {c.text}
-                        </li>
+                        </Box>
                       ))}
-                    </ul>
-                  </div>
+                    </Flex>
+                  </Box>
                 )}
-              </div>
+              </Flex>
             )}
-          </div>
+          </Box>
         )}
 
         {/* Related Subjects Panel */}
@@ -1480,10 +1645,11 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
         />
 
         <ExportPanel consequences={consequences} input={input} solutions={[]} />
-      </div>
+      </Flex>
+      </Flex>
 
       {/* Main map area */}
-      <div ref={mapContainerRef} className={`flex-1 relative ${focusAnimClass} ${activeNodeId && activeNodeId !== 'seed' ? 'has-focus-path' : ''}`}>
+      <Box ref={mapContainerRef} flex={1} position="relative" bg="bg" className={`${focusAnimClass} ${activeNodeId && activeNodeId !== 'seed' ? 'has-focus-path' : ''}`}>
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -1503,31 +1669,62 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
             style: { strokeLinecap: 'round', strokeLinejoin: 'round' },
           }}
         >
-          <Background color="#e8e8f0" gap={20} />
+          <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="var(--chakra-colors-border-muted, #F0F0F0)" />
           <Controls />
 
           {/* Tidy Layout button */}
           {generationPhase === 'complete' && consequences.length > 0 && (
-            <div className={`absolute top-4 z-10 ${filterPanelCollapsed ? 'right-16' : 'right-[236px]'}`} style={{ transition: 'right 0.2s ease' }}>
-              <button
+            <Box
+              position="absolute"
+              top={4}
+              zIndex={10}
+              right={filterPanelCollapsed ? '64px' : '236px'}
+              style={{ transition: 'right 0.2s ease' }}
+            >
+              <Flex
+                as="button"
                 onClick={handleTidyLayout}
-                className="flex items-center gap-1.5 px-3 py-2 bg-white/95 backdrop-blur-sm rounded-lg shadow-md border border-slate-200 text-xs font-medium text-slate-600 hover:text-slate-900 hover:border-slate-300 transition-colors"
+                align="center"
+                gap="6px"
+                px={3}
+                py={2}
+                bg="bg.muted"
+                backdropFilter="blur(8px)"
+                rounded="lg"
+                shadow="md"
+                border="1px solid"
+                borderColor="border.muted"
+                fontSize="xs"
+                fontWeight="medium"
+                color="fg.secondary"
+                _hover={{ color: 'fg', borderColor: 'border' }}
+                transition="colors"
                 title="Reset layout to clean radial arrangement"
               >
-                <LayoutGrid className="w-3.5 h-3.5" />
+                <LayoutGrid style={{ width: 14, height: 14 }} />
                 Tidy Layout
-              </button>
-            </div>
+              </Flex>
+            </Box>
           )}
 
           {/* ─── Filter Panel (right side of map) ─── */}
           {consequences.length > 0 && (
-            <div
-              className="absolute top-0 right-0 bottom-0 z-10 flex"
+            <Flex
+              position="absolute"
+              top={3}
+              right={3}
+              bottom={3}
+              zIndex={10}
               style={{ pointerEvents: 'none' }}
             >
-              <div
-                className="h-full bg-white shadow-lg border-l border-slate-200 overflow-y-auto"
+              <Box
+                h="100%"
+                bg="bg.canvas"
+                shadow="lg"
+                borderWidth="1px"
+                borderColor="border.emphasized"
+                rounded="xl"
+                overflowY="auto"
                 style={{
                   width: filterPanelCollapsed ? '44px' : '240px',
                   transition: 'width 0.2s ease',
@@ -1535,307 +1732,396 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
                 }}
               >
                 {/* Collapse toggle */}
-                <div className="sticky top-0 bg-white z-10 border-b border-slate-100">
-                  <button
+                <Box position="sticky" top={0} bg="bg.canvas" zIndex={10} borderBottom="1px solid" borderColor="border.muted" roundedTop="xl">
+                  <Flex
+                    as="button"
                     onClick={() => setFilterPanelCollapsed(prev => !prev)}
-                    className="w-full flex items-center gap-2 px-3 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
+                    w="100%"
+                    align="center"
+                    gap={2}
+                    px={3}
+                    py="10px"
+                    fontSize="xs"
+                    fontWeight="semibold"
+                    color="fg.secondary"
+                    _hover={{ bg: 'bg.hover' }}
+                    transition="colors"
                     title={filterPanelCollapsed ? 'Expand filters' : 'Collapse filters'}
                   >
-                    <Filter className="w-3.5 h-3.5 flex-shrink-0" />
+                    <Filter style={{ width: 14, height: 14, flexShrink: 0 }} />
                     {!filterPanelCollapsed && (
                       <>
-                        <span className="flex-1 text-left">Filters</span>
-                        <ChevronRight className="w-3.5 h-3.5" />
+                        <Text flex={1} textAlign="left">Filters</Text>
+                        <ChevronRight style={{ width: 14, height: 14 }} />
                       </>
                     )}
-                  </button>
-                </div>
+                  </Flex>
+                </Box>
 
                 {filterPanelCollapsed ? (
                   /* ── Collapsed: icon strip ── */
-                  <div className="flex flex-col items-center gap-1 py-2">
-                    <button onClick={() => setFilterPanelCollapsed(false)} className="p-1.5 rounded-md hover:bg-slate-100 text-slate-500" title="Category"><Layers className="w-4 h-4" /></button>
-                    <button onClick={() => setFilterPanelCollapsed(false)} className="p-1.5 rounded-md hover:bg-slate-100 text-slate-500" title="Sentiment"><TrendingUp className="w-4 h-4" /></button>
-                    <button onClick={() => setFilterPanelCollapsed(false)} className="p-1.5 rounded-md hover:bg-slate-100 text-slate-500" title="Probability"><Target className="w-4 h-4" /></button>
-                    <button onClick={() => setFilterPanelCollapsed(false)} className="p-1.5 rounded-md hover:bg-slate-100 text-slate-500" title="Importance"><Star className="w-4 h-4" /></button>
-                    <div className="w-6 border-t border-slate-200 my-1" />
-                    <button onClick={resetFilters} className="p-1.5 rounded-md hover:bg-slate-100 text-slate-400" title="Reset filters"><X className="w-4 h-4" /></button>
-                  </div>
+                  <Flex direction="column" align="center" gap={1} py={2}>
+                    <Box as="button" onClick={() => setFilterPanelCollapsed(false)} p="6px" rounded="md" _hover={{ bg: 'bg.hover' }} color="fg.muted" title="Category"><Layers style={{ width: 16, height: 16 }} /></Box>
+                    <Box as="button" onClick={() => setFilterPanelCollapsed(false)} p="6px" rounded="md" _hover={{ bg: 'bg.hover' }} color="fg.muted" title="Sentiment"><TrendingUp style={{ width: 16, height: 16 }} /></Box>
+                    <Box as="button" onClick={() => setFilterPanelCollapsed(false)} p="6px" rounded="md" _hover={{ bg: 'bg.hover' }} color="fg.muted" title="Probability"><Target style={{ width: 16, height: 16 }} /></Box>
+                    <Box as="button" onClick={() => setFilterPanelCollapsed(false)} p="6px" rounded="md" _hover={{ bg: 'bg.hover' }} color="fg.muted" title="Importance"><Star style={{ width: 16, height: 16 }} /></Box>
+                    <Box w="24px" borderTop="1px solid" borderColor="border.muted" my={1} />
+                    <Box as="button" onClick={resetFilters} p="6px" rounded="md" _hover={{ bg: 'bg.hover' }} color="fg.muted" title="Reset filters"><X style={{ width: 16, height: 16 }} /></Box>
+                  </Flex>
                 ) : (
                   /* ── Expanded: full filters ── */
-                  <div className="px-3 py-2 space-y-3">
+                  <Flex direction="column" gap={3} px={3} py={2}>
                     {/* Quick actions */}
-                    <div className="flex items-center gap-1.5">
-                      <button
+                    <Flex align="center" gap="6px">
+                      <Flex
+                        as="button"
                         onClick={toggleHighImpact}
-                        className={`flex items-center gap-1 px-2 py-1 text-[10px] rounded-md transition-colors flex-1 justify-center ${
-                          showHighImpact
-                            ? 'bg-orange-100 text-orange-600 border border-orange-300'
-                            : 'bg-slate-50 text-slate-500 hover:text-slate-700 border border-slate-200'
-                        }`}
+                        align="center"
+                        gap={1}
+                        px={2}
+                        py={1}
+                        fontSize="10px"
+                        rounded="md"
+                        transition="colors"
+                        flex={1}
+                        justify="center"
+                        bg={showHighImpact ? 'brand/12' : 'transparent'}
+                        color={showHighImpact ? 'fg' : 'fg.muted'}
+                        fontWeight={showHighImpact ? 'semibold' : 'normal'}
+                        border="1px solid"
+                        borderColor={showHighImpact ? 'brand/40' : 'border.muted'}
                       >
-                        <Zap className="w-3 h-3" /> Key Only
-                      </button>
-                      <button
+                        <Zap style={{ width: 12, height: 12 }} /> Key Only
+                      </Flex>
+                      <Box
+                        as="button"
                         onClick={resetFilters}
-                        className="px-2 py-1 text-[10px] text-slate-500 hover:text-slate-700 bg-slate-50 border border-slate-200 rounded-md"
+                        px={2}
+                        py={1}
+                        fontSize="10px"
+                        color="fg.muted"
+                        _hover={{ color: 'fg.secondary' }}
+                        bg="bg.hover"
+                        border="1px solid"
+                        borderColor="border.muted"
+                        rounded="md"
                       >
                         Reset
-                      </button>
-                    </div>
+                      </Box>
+                    </Flex>
 
                     {/* STEEP Category */}
-                    <div>
-                      <span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium mb-1.5 flex items-center gap-1">
-                        <Layers className="w-3 h-3" /> Category
-                      </span>
-                      <div className="flex flex-col gap-1">
-                        {(['social', 'technological', 'economic', 'environmental', 'political', 'ethical'] as STEEPCategory[]).map((cat) => (
-                          <button
-                            key={cat}
-                            onClick={() => toggleHighlightCategory(cat)}
-                            className={`w-full px-2 py-1 text-[10px] rounded transition-colors text-left flex items-center justify-between ${
-                              highlightFilters.categories.includes(cat) ? 'border' : 'bg-slate-50 text-slate-400 border border-slate-200'
-                            }`}
-                            style={highlightFilters.categories.includes(cat) ? {
-                              backgroundColor: `${STEEP_COLORS[cat]}20`,
-                              borderColor: STEEP_COLORS[cat],
-                              color: STEEP_COLORS[cat],
-                            } : {}}
-                          >
-                            {STEEP_LABELS[cat]} <span className="opacity-60">({stats.byCategory[cat] || 0})</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                    <Box>
+                      <Flex as="span" fontSize="10px" color="fg.muted" textTransform="uppercase" letterSpacing="wider" fontWeight="medium" mb="6px" align="center" gap={1}>
+                        <Layers style={{ width: 12, height: 12 }} /> Category
+                      </Flex>
+                      <Flex direction="column" gap={1}>
+                        {(['social', 'technological', 'economic', 'environmental', 'political', 'ethical'] as STEEPCategory[]).map((cat) => {
+                          const isActive = highlightFilters.categories.includes(cat);
+                          const isDark = colorMode === 'dark';
+                          return (
+                            <Flex
+                              as="button"
+                              key={cat}
+                              onClick={() => toggleHighlightCategory(cat)}
+                              w="100%"
+                              px={2}
+                              py={1}
+                              fontSize="10px"
+                              rounded="sm"
+                              transition="all 0.15s"
+                              textAlign="left"
+                              align="center"
+                              justify="space-between"
+                              gap={1}
+                              style={isActive ? { backgroundColor: getSteepMutedBg(cat, isDark), color: getSteepTextColor(cat, isDark) } : {}}
+                              color={isActive ? undefined : 'fg.muted'}
+                              fontWeight={isActive ? 'semibold' : 'normal'}
+                              border="1px solid"
+                              borderColor={isActive ? 'transparent' : 'border.muted'}
+                            >
+                              <Flex align="center" gap={1}>
+                                <SteepIcon category={cat} size={11} />
+                                {STEEP_LABELS[cat]}
+                              </Flex>
+                              <Text as="span" opacity={0.6}>({stats.byCategory[cat] || 0})</Text>
+                            </Flex>
+                          );
+                        })}
+                      </Flex>
+                    </Box>
 
                     {/* Sentiment */}
-                    <div>
-                      <span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium mb-1.5 flex items-center gap-1">
+                    <Box>
+                      <Flex as="span" fontSize="10px" color="fg.muted" textTransform="uppercase" letterSpacing="wider" fontWeight="medium" mb="6px" align="center" gap={1}>
                         Sentiment
-                      </span>
-                      <div className="flex flex-col gap-1">
-                        <button
-                          onClick={() => toggleHighlightSentiment('positive')}
-                          className={`w-full px-2 py-1 text-[10px] rounded flex items-center gap-1.5 transition-colors border text-left ${
-                            highlightFilters.sentiments.includes('positive') ? '' : 'bg-slate-50 text-slate-400 border-slate-200'
-                          }`}
-                          style={highlightFilters.sentiments.includes('positive') ? { backgroundColor: '#e6fff5', borderColor: '#00d4aa', color: '#0a6847' } : {}}
-                        >
-                          <TrendingUp className="w-2.5 h-2.5 flex-shrink-0" /> <span className="flex-1">Positive</span> <span className="opacity-60">({stats.bySentiment.positive})</span>
-                        </button>
-                        <button
-                          onClick={() => toggleHighlightSentiment('negative')}
-                          className={`w-full px-2 py-1 text-[10px] rounded flex items-center gap-1.5 transition-colors border text-left ${
-                            highlightFilters.sentiments.includes('negative') ? '' : 'bg-slate-50 text-slate-400 border-slate-200'
-                          }`}
-                          style={highlightFilters.sentiments.includes('negative') ? { backgroundColor: '#fff0f3', borderColor: '#ff4d6d', color: '#a4133c' } : {}}
-                        >
-                          <TrendingDown className="w-2.5 h-2.5 flex-shrink-0" /> <span className="flex-1">Negative</span> <span className="opacity-60">({stats.bySentiment.negative})</span>
-                        </button>
-                        <button
-                          onClick={() => toggleHighlightSentiment('neutral')}
-                          className={`w-full px-2 py-1 text-[10px] rounded flex items-center gap-1.5 transition-colors text-left ${
-                            highlightFilters.sentiments.includes('neutral')
-                              ? 'bg-slate-200 text-slate-700 border border-slate-400'
-                              : 'bg-slate-50 text-slate-400 border border-slate-200'
-                          }`}
-                        >
-                          <Minus className="w-2.5 h-2.5 flex-shrink-0" /> <span className="flex-1">Neutral</span> <span className="opacity-60">({stats.bySentiment.neutral})</span>
-                        </button>
-                      </div>
-                    </div>
+                      </Flex>
+                      <Flex direction="column" gap={1}>
+                        {(['positive', 'negative', 'neutral'] as Sentiment[]).map((sent) => (
+                          <Flex
+                            as="button"
+                            key={sent}
+                            onClick={() => toggleHighlightSentiment(sent)}
+                            w="100%"
+                            px={2}
+                            py={1}
+                            fontSize="10px"
+                            rounded="sm"
+                            align="center"
+                            gap="6px"
+                            transition="colors"
+                            border="1px solid"
+                            textAlign="left"
+                            bg={highlightFilters.sentiments.includes(sent) ? 'brand/12' : 'transparent'}
+                            color={highlightFilters.sentiments.includes(sent) ? 'fg' : 'fg.muted'}
+                            fontWeight={highlightFilters.sentiments.includes(sent) ? 'semibold' : 'normal'}
+                            borderColor={highlightFilters.sentiments.includes(sent) ? 'brand/40' : 'border.muted'}
+                          >
+                            <Text fontSize="sm">{SENTIMENT_SYMBOLS[sent]}</Text> <Text flex={1} textTransform="capitalize">{sent}</Text> <Text as="span" opacity={0.6}>({stats.bySentiment[sent]})</Text>
+                          </Flex>
+                        ))}
+                      </Flex>
+                    </Box>
 
                     {/* Probability */}
-                    <div>
-                      <span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium mb-1.5 flex items-center gap-1">
-                        <Target className="w-3 h-3" /> Probability
-                      </span>
-                      <div className="flex flex-col gap-1">
+                    <Box>
+                      <Flex as="span" fontSize="10px" color="fg.muted" textTransform="uppercase" letterSpacing="wider" fontWeight="medium" mb="6px" align="center" gap={1}>
+                        <Target style={{ width: 12, height: 12 }} /> Probability
+                      </Flex>
+                      <Flex direction="column" gap={1}>
                         {(['probable', 'plausible', 'possible', 'wildcard'] as Probability[]).map((prob) => (
-                          <button
+                          <Flex
+                            as="button"
                             key={prob}
                             onClick={() => toggleHighlightProbability(prob)}
-                            className={`w-full px-2 py-1 text-[10px] rounded transition-colors text-left flex items-center justify-between ${
-                              highlightFilters.probabilities.includes(prob) ? 'border' : 'bg-slate-50 text-slate-400 border border-slate-200'
-                            }`}
-                            style={highlightFilters.probabilities.includes(prob) ? {
-                              backgroundColor: `${PROBABILITY_COLORS[prob]}20`,
-                              borderColor: PROBABILITY_COLORS[prob],
-                              color: PROBABILITY_COLORS[prob],
-                            } : {}}
+                            w="100%"
+                            px={2}
+                            py={1}
+                            fontSize="10px"
+                            rounded="sm"
+                            transition="colors"
+                            textAlign="left"
+                            align="center"
+                            justify="space-between"
+                            bg={highlightFilters.probabilities.includes(prob) ? 'brand/12' : 'transparent'}
+                            color={highlightFilters.probabilities.includes(prob) ? 'fg' : 'fg.muted'}
+                            fontWeight={highlightFilters.probabilities.includes(prob) ? 'semibold' : 'normal'}
+                            border="1px solid"
+                            borderColor={highlightFilters.probabilities.includes(prob) ? 'brand/40' : 'border.muted'}
                           >
-                            <span className="capitalize">{prob}</span> <span className="opacity-60">({stats.byProbability[prob] || 0})</span>
-                          </button>
+                            <Text textTransform="capitalize">{prob}</Text> <Text as="span" opacity={0.6}>({stats.byProbability[prob] || 0})</Text>
+                          </Flex>
                         ))}
-                      </div>
-                    </div>
+                      </Flex>
+                    </Box>
 
                     {/* Importance */}
-                    <div>
-                      <span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium mb-1.5 flex items-center gap-1">
-                        <Star className="w-3 h-3" /> Importance
-                      </span>
-                      <div className="flex flex-col gap-1">
+                    <Box>
+                      <Flex as="span" fontSize="10px" color="fg.muted" textTransform="uppercase" letterSpacing="wider" fontWeight="medium" mb="6px" align="center" gap={1}>
+                        <Star style={{ width: 12, height: 12 }} /> Importance
+                      </Flex>
+                      <Flex direction="column" gap={1}>
                         {(['critical', 'high', 'medium', 'low'] as Importance[]).map((imp) => (
-                          <button
+                          <Flex
+                            as="button"
                             key={imp}
                             onClick={() => toggleHighlightImportance(imp)}
-                            className={`w-full px-2 py-1 text-[10px] rounded transition-colors text-left flex items-center justify-between ${
-                              highlightFilters.importance.includes(imp)
-                                ? imp === 'critical' ? 'bg-amber-100 text-amber-700 border border-amber-300'
-                                  : imp === 'high' ? 'bg-blue-100 text-blue-700 border border-blue-300'
-                                  : 'bg-slate-200 text-slate-700 border border-slate-300'
-                                : 'bg-slate-50 text-slate-400 border border-slate-200'
-                            }`}
+                            w="100%"
+                            px={2}
+                            py={1}
+                            fontSize="10px"
+                            rounded="sm"
+                            transition="colors"
+                            textAlign="left"
+                            align="center"
+                            justify="space-between"
+                            bg={highlightFilters.importance.includes(imp) ? 'brand/12' : 'transparent'}
+                            color={highlightFilters.importance.includes(imp) ? 'fg' : 'fg.muted'}
+                            fontWeight={highlightFilters.importance.includes(imp) ? 'semibold' : 'normal'}
+                            border="1px solid"
+                            borderColor={highlightFilters.importance.includes(imp) ? 'brand/40' : 'border.muted'}
                           >
-                            <span className="capitalize">{imp}</span> <span className="opacity-60">({stats.byImportance[imp] || 0})</span>
-                          </button>
+                            <Text textTransform="capitalize">{imp}</Text> <Text as="span" opacity={0.6}>({stats.byImportance[imp] || 0})</Text>
+                          </Flex>
                         ))}
-                      </div>
-                    </div>
+                      </Flex>
+                    </Box>
 
                     {/* Order */}
-                    <div>
-                      <span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium mb-1.5 flex items-center gap-1">
+                    <Box>
+                      <Flex as="span" fontSize="10px" color="fg.muted" textTransform="uppercase" letterSpacing="wider" fontWeight="medium" mb="6px" align="center" gap={1}>
                         Order
-                      </span>
-                      <div className="flex flex-col gap-1">
+                      </Flex>
+                      <Flex direction="column" gap={1}>
                         {([1, 2, 3, 4, 5].filter(o => consequences.some(c => c.order === o)) as ConsequenceOrder[]).map((ord) => (
-                          <button
+                          <Flex
+                            as="button"
                             key={ord}
                             onClick={() => toggleHighlightOrder(ord)}
-                            className={`w-full px-2 py-1 text-[10px] rounded transition-colors text-left flex items-center justify-between ${
-                              highlightFilters.orders.includes(ord)
-                                ? 'bg-indigo-100 text-indigo-700 border border-indigo-300'
-                                : 'bg-slate-50 text-slate-400 border border-slate-200'
-                            }`}
+                            w="100%"
+                            px={2}
+                            py={1}
+                            fontSize="10px"
+                            rounded="sm"
+                            transition="colors"
+                            textAlign="left"
+                            align="center"
+                            justify="space-between"
+                            bg={highlightFilters.orders.includes(ord) ? 'brand/12' : 'transparent'}
+                            color={highlightFilters.orders.includes(ord) ? 'fg' : 'fg.muted'}
+                            fontWeight={highlightFilters.orders.includes(ord) ? 'semibold' : 'normal'}
+                            border="1px solid"
+                            borderColor={highlightFilters.orders.includes(ord) ? 'brand/40' : 'border.muted'}
                           >
-                            {ord === 1 ? '1st Order' : ord === 2 ? '2nd Order' : ord === 3 ? '3rd Order' : `${ord}th Order`} <span className="opacity-60">({stats.byOrder[ord] || 0})</span>
-                          </button>
+                            {ord === 1 ? '1st Order' : ord === 2 ? '2nd Order' : ord === 3 ? '3rd Order' : `${ord}th Order`} <Text as="span" opacity={0.6}>({stats.byOrder[ord] || 0})</Text>
+                          </Flex>
                         ))}
-                      </div>
-                    </div>
+                      </Flex>
+                    </Box>
 
                     {/* Ideas toggle */}
-                    <div>
-                      <button
+                    <Box>
+                      <Flex
+                        as="button"
                         onClick={toggleShowIdeas}
-                        className={`w-full px-1.5 py-1 text-[10px] rounded flex items-center gap-1 justify-center transition-colors border ${
-                          highlightFilters.showIdeas ? '' : 'bg-slate-50 text-slate-400 border-slate-200'
-                        }`}
-                        style={highlightFilters.showIdeas ? { backgroundColor: '#fff7e6', borderColor: '#ff9f1c', color: '#7a4100' } : {}}
+                        w="100%"
+                        px="6px"
+                        py={1}
+                        fontSize="10px"
+                        rounded="sm"
+                        align="center"
+                        gap={1}
+                        justify="center"
+                        transition="colors"
+                        border="1px solid"
+                        bg={highlightFilters.showIdeas ? 'brand/12' : 'transparent'}
+                        color={highlightFilters.showIdeas ? 'fg' : 'fg.muted'}
+                        fontWeight={highlightFilters.showIdeas ? 'semibold' : 'normal'}
+                        borderColor={highlightFilters.showIdeas ? 'brand/40' : 'border.muted'}
                       >
-                        <Lightbulb className="w-3 h-3" /> Ideas & Solutions <span className="opacity-60">({stats.ideasCount})</span>
-                      </button>
-                    </div>
-                  </div>
+                        <Lightbulb style={{ width: 12, height: 12 }} /> Ideas & Solutions <Text as="span" opacity={0.6}>({stats.ideasCount})</Text>
+                      </Flex>
+                    </Box>
+                  </Flex>
                 )}
-              </div>
-            </div>
+              </Box>
+            </Flex>
           )}
 
           <MiniMap
             nodeColor={(node) => {
-              if (node.type === 'seed') return '#2b6cb0';
-              const consequence = node.data?.consequence as Consequence;
-              if (consequence) {
-                return getSentimentColors(consequence.sentiment).border;
-              }
-              return '#94a3b8';
+              if (node.type === 'seed') return '#0005e9';
+              return 'var(--chakra-colors-fg-muted, #94a3b8)';
             }}
-            maskColor="rgba(0, 0, 0, 0.1)"
+            maskColor="rgba(var(--node-overlay-inv, 0,0,0), 0.08)"
           />
         </ReactFlow>
 
         {/* Center screen progress overlay */}
         {generationPhase !== 'complete' && generationPhase !== 'idle' && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
-            <div className="bg-white/90 backdrop-blur-md rounded-2xl shadow-2xl border border-slate-200 px-8 py-6 max-w-md text-center pointer-events-auto">
-              <div className="flex justify-center mb-4">
-                <div className="relative">
-                  <Loader2 className="w-10 h-10 text-seed animate-spin" />
-                  <Sparkles className="w-5 h-5 text-amber-500 absolute -top-1 -right-1 animate-pulse" />
-                </div>
-              </div>
-              <h3 className="font-bold text-slate-900 text-lg mb-1">
+          <Flex position="absolute" inset={0} align="center" justify="center" pointerEvents="none" zIndex={20}>
+            <Box bg="bg.muted" backdropFilter="blur(12px)" rounded="2xl" shadow="2xl" border="1px solid" borderColor="border.muted" px={8} py={6} maxW="md" textAlign="center" pointerEvents="auto">
+              <Flex justify="center" mb={4}>
+                <Box position="relative">
+                  <Loader2 style={{ width: 40, height: 40, color: 'var(--chakra-colors-brand)' }} className="animate-spin" />
+                  <Sparkles style={{ width: 20, height: 20, color: '#f59e0b', position: 'absolute', top: -4, right: -4 }} className="animate-pulse" />
+                </Box>
+              </Flex>
+              <Text fontWeight="bold" color="fg" fontSize="lg" mb={1}>
                 {generationPhase === 'first-order' ? 'Mapping Direct Consequences' :
                  generationPhase === 'second-order' ? 'Tracing Ripple Effects' :
                  generationPhase === 'third-order' ? 'Discovering Cascade Impacts' :
                  generationPhase === 'solutions' ? 'Generating Solutions & Ideas' :
                  'Analyzing...'}
-              </h3>
-              <p className="text-sm text-slate-500 mb-4">
+              </Text>
+              <Text fontSize="sm" color="fg.muted" mb={4}>
                 {progressMessage || `Phase ${getPhaseNumber(generationPhase)} of ${totalPhases}`}
-              </p>
-              <div className="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden">
-                <div
-                  className="bg-seed h-2.5 rounded-full transition-all duration-700 ease-out"
+              </Text>
+              <Box w="100%" bg="bg.active" rounded="full" h="10px" overflow="hidden">
+                <Box
+                  bg="brand"
+                  h="10px"
+                  rounded="full"
+                  transition="all 0.7s ease-out"
                   style={{ width: `${Math.min((getPhaseNumber(generationPhase) / totalPhases) * 100, 100)}%` }}
                 />
-              </div>
-              <p className="text-xs text-slate-400 mt-2">
+              </Box>
+              <Text fontSize="xs" color="fg.muted" mt={2}>
                 {consequences.length > 0 ? `${consequences.length} consequences mapped so far` : 'Starting analysis...'}
-              </p>
-            </div>
-          </div>
+              </Text>
+            </Box>
+          </Flex>
         )}
 
         {/* Floating prompt bar */}
         {generationPhase === 'complete' && (
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 w-full max-w-2xl px-4 z-10">
-            <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border border-slate-200 p-3">
+          <Box position="absolute" bottom={6} left="50%" transform="translateX(-50%)" w="100%" maxW="2xl" px={4} zIndex={10}>
+            <Box bg="bg.muted" backdropFilter="blur(8px)" rounded="2xl" shadow="lg" border="1px solid" borderColor="border.muted" p={3}>
               {promptProgress && (
-                <div className="text-xs text-slate-500 mb-2 px-2 flex items-center gap-2">
-                  {isPrompting && <Loader2 className="w-3 h-3 animate-spin" />}
+                <Flex fontSize="xs" color="fg.muted" mb={2} px={2} align="center" gap={2}>
+                  {isPrompting && <Loader2 style={{ width: 12, height: 12 }} className="animate-spin" />}
                   {promptProgress}
-                </div>
+                </Flex>
               )}
-              <form
-                onSubmit={(e) => { e.preventDefault(); handlePromptSubmit(); }}
-                className="flex items-center gap-2"
+              <Flex
+                as="form"
+                onSubmit={(e: React.FormEvent) => { e.preventDefault(); handlePromptSubmit(); }}
+                align="center"
+                gap={2}
               >
                 {lastExpansionTime && (
-                  <button
+                  <Box
+                    as="button"
                     type="button"
                     onClick={() => setShowNewHighlight(!showNewHighlight)}
-                    className={`p-1.5 rounded-lg transition-colors flex-shrink-0 ${
-                      showNewHighlight
-                        ? 'bg-amber-100 text-amber-600'
-                        : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'
-                    }`}
+                    p="6px"
+                    rounded="lg"
+                    transition="colors"
+                    flexShrink={0}
+                    bg={showNewHighlight ? 'warning/12' : 'transparent'}
+                    color={showNewHighlight ? 'warning' : 'fg.muted'}
+                    _hover={{ color: 'fg.secondary', bg: 'bg.hover' }}
                     title={showNewHighlight ? 'Hide new highlights' : 'Show new highlights'}
                   >
-                    <Sparkles className="w-4 h-4" />
-                  </button>
+                    <Sparkles style={{ width: 16, height: 16 }} />
+                  </Box>
                 )}
-                {!lastExpansionTime && <Sparkles className="w-4 h-4 text-seed flex-shrink-0 ml-1" />}
+                {!lastExpansionTime && <Box as={Sparkles} w="16px" h="16px" color="brand" flexShrink={0} ml={1} />}
                 <input
                   type="text"
                   value={promptText}
                   onChange={(e) => setPromptText(e.target.value)}
                   placeholder="Push deeper, add wildcards, explore economic impacts..."
-                  className="flex-1 bg-transparent text-sm text-slate-700 placeholder-slate-400 outline-none"
+                  style={{ flex: 1, background: 'transparent', fontSize: '14px', outline: 'none' }}
                   disabled={isPrompting}
                 />
-                <button
+                <Box
+                  as="button"
                   type="submit"
                   disabled={!promptText.trim() || isPrompting}
-                  className="p-2 rounded-xl bg-seed text-white hover:bg-seed-dark disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+                  p={2}
+                  rounded="xl"
+                  bg="brand"
+                  color="brand.contrast"
+                  _hover={{ opacity: 0.9 }}
+                  _disabled={{ opacity: 0.4, cursor: 'not-allowed' }}
+                  transition="colors"
+                  flexShrink={0}
                 >
                   {isPrompting ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <Loader2 style={{ width: 16, height: 16 }} className="animate-spin" />
                   ) : (
-                    <Send className="w-4 h-4" />
+                    <Send style={{ width: 16, height: 16 }} />
                   )}
-                </button>
-              </form>
-            </div>
-          </div>
+                </Box>
+              </Flex>
+            </Box>
+          </Box>
         )}
-      </div>
+      </Box>
 
-    </div>
+      </Flex>
+    </Flex>
   );
 }
 

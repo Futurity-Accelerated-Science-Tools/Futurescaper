@@ -91,6 +91,18 @@ When analyzing consequences, consider ALL dimensions:
 
 Always return valid JSON arrays. Be specific, analytical, and comprehensive.`;
 
+export function buildSystemPrompt(verbosity?: 'concise' | 'normal' | 'detailed'): string {
+  let prompt = SYSTEM_PROMPT;
+  if (verbosity === 'concise') {
+    prompt += '\n\nKeep each item description (consequences, solutions, and ideas) to 1 short sentence (under 15 words).';
+  } else if (verbosity === 'detailed') {
+    prompt += '\n\nProvide 2-3 detailed sentences per item (consequences, solutions, and ideas) with specific examples and concrete details.';
+  } else {
+    prompt += '\n\nKeep each item description (consequences, solutions, and ideas) to 1-2 sentences.';
+  }
+  return prompt;
+}
+
 export function buildAnalysisPrompt(input: FutureInput): string {
   return `## Task: Analyze Input Scenario
 
@@ -111,7 +123,37 @@ Provide a brief analysis (2-3 paragraphs) covering:
 Return as plain text, not JSON.`;
 }
 
-export function buildFirstOrderPrompt(input: FutureInput): string {
+// Build horizon-aware time frame instructions
+function getHorizonBias(horizon: string | undefined): string {
+  switch (horizon) {
+    case 'near':
+      return `
+## TIME HORIZON BIAS: NEAR-TERM (1-3 years)
+Focus consequences on the **immediate and short-term** future:
+- At least 4 out of 6 consequences should have timeFrame "immediate" or "short-term"
+- At most 2 may be "long-term" — and only if they're clearly triggered within 1-3 years
+- Think about what happens in the first days, weeks, and months
+- Prioritize consequences that would unfold within 1-3 years`;
+    case 'far':
+      return `
+## TIME HORIZON BIAS: FAR-FUTURE (10+ years)
+Focus consequences on **long-term structural changes**:
+- At least 4 out of 6 consequences should have timeFrame "long-term"
+- At most 2 may be "immediate" or "short-term" — only if they're catalysts for the long-term shift
+- Think about paradigm shifts, generational changes, and institutional transformations
+- Prioritize consequences that unfold over a decade or more`;
+    case 'medium':
+    default:
+      return `
+## TIME HORIZON: BALANCED (3-10 years)
+Distribute consequences across all time frames:
+- Include a mix of "immediate", "short-term", and "long-term" timeFrames
+- Aim for roughly equal distribution across time horizons`;
+  }
+}
+
+export function buildFirstOrderPrompt(input: FutureInput, count?: number, existingSiblings?: Consequence[]): string {
+  const horizonText = getHorizonBias(input.horizon);
   const perspectiveText = input.perspective
     ? `
 
@@ -138,21 +180,25 @@ Examples of correct perspective-based sentiment:
 Analyze this scenario and identify **ALL obvious, direct, first-order consequences** across every STEEPE category and geographic scope.
 
 **Title:** ${input.title}
-**Description:** ${input.description}${perspectiveText}
+**Description:** ${input.description}${perspectiveText}${horizonText}
 ${input.sourceText ? `\n**Context:**\n${input.sourceText.slice(0, 3000)}` : ''}
 
-Generate **20-25 first-order consequences** with a MIX of:
+Generate **exactly ${count ? count : 6} first-order consequences**${!count || count === 6 ? ' — exactly one for each STEEPE category (Social, Technological, Economic, Environmental, Political, Ethical). Do NOT generate more or fewer than 6.' : `. Return exactly ${count} items in the JSON array, no more and no fewer. Choose the ${count} most impactful STEEPE categories for this scenario.`} Include a MIX of:
 - **Mundane/obvious** consequences (everyday impacts people would notice immediately)
 - **Moderate** consequences (significant but expected developments)
 - **Dramatic** consequences (major shifts that would make headlines)
 
 Requirements:
-1. Cover ALL 6 STEEPE categories (at least 4 per category)
+1. ${!count || count === 6 ? 'Cover ALL 6 STEEPE categories (exactly 1 per category)' : `Spread across as many different STEEPE categories as possible (up to ${count} of: Social, Technological, Economic, Environmental, Political, Ethical). Do NOT repeat the same category unless you have more items than categories.`}
 2. Include positive, negative, AND neutral consequences (aim for balance)
 3. Vary the timeFrame: mix of "immediate", "short-term", and "long-term"
 4. Vary the probability: mostly "probable" and "plausible", some "possible"
 5. Vary geographicScope: "local" (directly affected area), "regional" (Europe, Americas, etc.), "global"
-6. Include an "importance" field: "critical" (game-changing), "high", "medium", or "low" (minor but notable)
+6. **IMPORTANCE RATINGS DRIVE EXPLORATION DEPTH** — your importance ratings determine which branches get explored deeply vs. lightly. Be deliberate and differentiated:
+   - Assign **"critical"** to exactly 1–2 consequences that are truly game-changing and deserve the deepest exploration
+   - Assign **"high"** to 1–2 consequences that are significant but secondary
+   - Assign **"medium"** or **"low"** to the rest — these are real consequences but less pivotal
+   - Do NOT mark everything as "critical" or "high" — the differentiation matters
 7. Be SPECIFIC with concrete details, names of institutions, specific economic figures, etc.
 
 Think about:
@@ -161,7 +207,13 @@ Think about:
 - What do ordinary citizens experience?
 - What markets and industries are affected?
 - What military/security changes occur?
+${existingSiblings && existingSiblings.length > 0 ? `
+## CRITICAL: AVOID DUPLICATES
+The following consequences have ALREADY been generated for this scenario. You MUST NOT generate consequences that are similar to, overlap with, or rephrase any of these. Each new consequence must cover genuinely different ground:
+${existingSiblings.map(c => `- [${c.category.toUpperCase()}] ${c.text}`).join('\n')}
 
+Generate consequences that explore DIFFERENT aspects, categories, angles, or stakeholders than those listed above.
+` : ''}
 Return ONLY a JSON array:
 [
   {
@@ -204,7 +256,7 @@ ${input.description}${perspectiveText}
 **First-Order Consequences:**
 ${summary}
 
-Generate **25-30 second-order consequences** with a MIX of radicality:
+Generate **15-20 second-order consequences** with a MIX of radicality:
 - **Mundane ripples** (bureaucratic responses, routine adjustments)
 - **Moderate developments** (policy changes, market shifts)
 - **Significant escalations** (alliance changes, major economic moves)
@@ -279,7 +331,7 @@ Now identify **third-order cascade effects** - deeper systemic changes that emer
 **Second-Order Consequences:**
 ${secondOrder}
 
-Generate **10-15 third-order consequences** representing structural changes AND wildcards:
+Generate **6-10 third-order consequences** representing structural changes AND wildcards:
 
 Include a MIX of:
 - **Institutional adaptations** (new treaties, reformed organizations)
@@ -287,7 +339,7 @@ Include a MIX of:
 - **Social movements** (new political parties, civil society responses)
 - **Technological pivots** (defense tech, surveillance, communication)
 - **Environmental policies** (governance, resource management)
-- **WILDCARDS** (3-5 surprising, counterintuitive, or black swan developments)
+- **WILDCARDS** (1-3 surprising, counterintuitive, or black swan developments)
 
 Requirements:
 1. **CRITICAL: Each consequence MUST specify which second-order consequence (by number) it flows from using "parentIndex"**
@@ -297,7 +349,7 @@ Requirements:
 5. Long-term economic restructuring
 6. Technology development trajectories
 7. Include "importance": "critical", "high", "medium", or "low"
-8. Include 3-5 WILDCARDS with probability: "wildcard" - these are surprising, counterintuitive, or black swan possibilities
+8. Include 1-3 WILDCARDS with probability: "wildcard" - these are surprising, counterintuitive, or black swan possibilities
 
 Think about 1-10 year timeframe:
 - How does the international order reorganize?
@@ -499,10 +551,16 @@ Return ONLY a JSON array:
 ]`;
 }
 
+// Branch exploration modes for asymmetric priority generation
+export type BranchMode = 'deep' | 'light' | 'normal';
+
 // Generate child consequences from a specific parent node (used by radial menu AI Generate)
 export function buildChildConsequencesPrompt(
   input: FutureInput,
-  parentConsequence: Consequence
+  parentConsequence: Consequence,
+  count: number = 3,
+  existingSiblings?: Consequence[],
+  branchMode: BranchMode = 'normal'
 ): string {
   const nextOrder = Math.min(parentConsequence.order + 1, 5) as ConsequenceOrder;
   const orderLabels: Record<number, string> = {
@@ -517,18 +575,40 @@ export function buildChildConsequencesPrompt(
     ? `\n**Evaluate ALL sentiment from the perspective of: ${input.perspective}**\n- "positive" = HELPS ${input.perspective}\n- "negative" = HURTS ${input.perspective}`
     : '';
 
+  const branchModeText = branchMode === 'deep'
+    ? `\n\n## DEEP EXPLORATION MODE
+This is a **high-priority branch** selected for deep exploration because of its critical importance. Generate ${count} consequences that:
+- Cover **maximally diverse angles** — different STEEPE categories, different stakeholders, different time horizons
+- Include at least one **counterintuitive or surprising** downstream effect
+- Include at least one consequence that **crosses domains** (e.g., a political consequence causing economic ripples)
+- Be bold and specific — this branch deserves thorough analysis
+- Assign importance ratings deliberately: mark 1–2 as "critical" or "high" to guide further depth, the rest as "medium" or "low"`
+    : branchMode === 'light'
+    ? `\n\n## LIGHT TOUCH MODE
+This is a **lower-priority branch** that gets a brief exploration. Generate exactly ${count} consequence(s) representing only the **single most significant and likely downstream effect**. Focus on:
+- The most impactful and probable consequence — the one a futures analyst would highlight first
+- Be concise but specific
+- This consequence should capture the essence of where this branch leads`
+    : '';
+
+  const horizonChildText = input.horizon === 'near'
+    ? '\n**Time bias:** Focus on immediate and short-term consequences (1-3 year horizon).'
+    : input.horizon === 'far'
+    ? '\n**Time bias:** Focus on long-term structural consequences (10+ year horizon).'
+    : '';
+
   return `## Task: Generate Child Consequences
 
 You are analyzing consequences of this scenario:
 **Scenario:** ${input.title}
-${input.description}${perspectiveText}
+${input.description}${perspectiveText}${branchModeText}${horizonChildText}
 
 A user has selected this specific consequence and wants to explore its downstream effects:
 
 **Parent Consequence [Order ${parentConsequence.order}, ${parentConsequence.category.toUpperCase()}, ${parentConsequence.sentiment}]:**
 "${parentConsequence.text}"
 
-Generate exactly **3 ${orderLabel}** that flow directly from this parent consequence.
+Generate exactly **${count} ${orderLabel}** that flow directly from this parent consequence.
 
 Requirements:
 1. Each must be a logical, specific consequence OF THE PARENT (not the original scenario)
@@ -536,7 +616,13 @@ Requirements:
 3. Include a mix of sentiments — remember consequences often flip sentiment
 4. Be concrete with specific details, institutions, figures
 5. Vary probability and timeframe
+${existingSiblings && existingSiblings.length > 0 ? `
+## CRITICAL: AVOID DUPLICATES
+This parent already has the following child consequences. You MUST NOT generate consequences that are similar to, overlap with, or rephrase any of these. Each new consequence must cover genuinely different ground:
+${existingSiblings.map(c => `- [${c.category.toUpperCase()}] ${c.text}`).join('\n')}
 
+Generate consequences that explore DIFFERENT aspects, categories, angles, or stakeholders than those listed above.
+` : ''}
 Return ONLY a JSON array:
 [
   {
