@@ -178,9 +178,9 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
   // Delete confirmation modal state (replaces native confirm() dialog)
   const [pendingDelete, setPendingDelete] = useState<{
     id: string;
-    descendantIds: string[];
-    message: string;
-    orphanUpdates?: Map<string, string[]>; // Surviving nodes that need parent refs cleaned
+    descendantIds: string[];       // IDs that would be deleted in a branch delete
+    orphanUpdates?: Map<string, string[]>; // Surviving nodes that need parent refs cleaned (branch mode)
+    directChildIds: string[];      // Direct children that become unattached in single-node delete
   } | null>(null);
 
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -318,9 +318,10 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
   // handleSeedClick and handleNodeClick moved below connect handlers (see after isValidConnectTarget)
 
   const handleStartEdit = useCallback((id: string) => {
+    if (isGenerationRunning) return;
     setEditingNodeId(id);
     setActiveNodeId(null);
-  }, []);
+  }, [isGenerationRunning]);
 
   const handleSaveEdit = useCallback((id: string, updates: Partial<Consequence>) => {
     setConsequences(prev =>
@@ -343,6 +344,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
   }, [consequences]);
 
   const handleSeedAddChild = useCallback(() => {
+    if (isGenerationRunning) return;
     const newId = `manual-${Date.now()}`;
     const newConsequence: Consequence = {
       id: newId,
@@ -358,7 +360,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     setConsequences(prev => [...prev, newConsequence]);
     setEditingNodeId(newId);
     setActiveNodeId(null);
-  }, []);
+  }, [isGenerationRunning]);
 
   const handleSeedGenerateChildren = useCallback(async (count?: number) => {
     setIsGeneratingChildrenFor('seed');
@@ -399,6 +401,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
   }, [effectiveInput, consequences]);
 
   const handleAddChild = useCallback((parentId: string) => {
+    if (isGenerationRunning) return;
     const parent = consequenceMap.get(parentId);
     const newOrder = parent ? (Math.min(parent.order + 1, 5) as ConsequenceOrder) : 1;
     const newId = `manual-${Date.now()}`;
@@ -416,7 +419,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     setConsequences(prev => [...prev, newConsequence]);
     setEditingNodeId(newId);
     setActiveNodeId(null);
-  }, [consequences]);
+  }, [consequences, isGenerationRunning]);
 
   // ── Connect mode: cycle detection ──
   // Returns true if making `parentId` a parent of `childId` would create a cycle.
@@ -444,20 +447,21 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
 
   // ── Connect mode: enter ──
   const handleEnterConnectMode = useCallback((sourceId: string) => {
+    if (isGenerationRunning) return;
     setConnectModeSourceId(sourceId);
     setConnectHoveredNodeId(null);
     setActiveNodeId(null); // Deselect so toolbar hides
-  }, []);
+  }, [isGenerationRunning]);
 
   // ── Connect mode: complete connection ──
   const handleCompleteConnection = useCallback((targetId: string) => {
     if (!connectModeSourceId) return;
     const sourceId = connectModeSourceId;
 
-    // Determine direction: normal = source is parent, target is child
-    // Shift reverses: target becomes parent of source
-    const parentId = isShiftHeld ? targetId : sourceId;
-    const childId = isShiftHeld ? sourceId : targetId;
+    // Determine direction: normal = source is child, target is parent
+    // Shift reverses: source becomes parent of target
+    const parentId = isShiftHeld ? sourceId : targetId;
+    const childId = isShiftHeld ? targetId : sourceId;
 
     // Validation
     if (parentId === childId) return;
@@ -523,8 +527,8 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     if (nodeId === connectModeSourceId) return false;
 
     const sourceId = connectModeSourceId;
-    const parentId = isShiftHeld ? nodeId : sourceId;
-    const childId = isShiftHeld ? sourceId : nodeId;
+    const parentId = isShiftHeld ? sourceId : nodeId;
+    const childId = isShiftHeld ? nodeId : sourceId;
 
     // Can't make seed a child
     if (childId === 'seed') return false;
@@ -543,6 +547,8 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
 
   // ── Edge click handler — shows popover with Disconnect / Reverse ──
   const handleEdgeClick = useCallback((_event: React.MouseEvent, edge: Edge) => {
+    if (isGenerationRunning) return;
+
     // Parse edge ID: "edge-{parentId}-{childId}"
     const parentId = edge.source;
     const childId = edge.target;
@@ -558,7 +564,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       screenX: _event.clientX,
       screenY: _event.clientY,
     });
-  }, []);
+  }, [isGenerationRunning]);
 
   // ── Disconnect: remove a parent from a child's parentIds ──
   const handleDisconnect = useCallback(() => {
@@ -619,6 +625,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
 
   // ── handleSeedClick & handleNodeClick (after connect handlers to avoid hoisting issues) ──
   const handleSeedClick = useCallback(() => {
+    if (isGenerationRunning) return;
     if (connectModeSourceId) {
       if (isValidConnectTarget('seed')) {
         handleCompleteConnection('seed');
@@ -628,9 +635,10 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     setActiveNodeId(prev => prev === 'seed' ? null : 'seed');
     setEditingNodeId(null);
     setEdgePopover(null);
-  }, [connectModeSourceId, isValidConnectTarget, handleCompleteConnection]);
+  }, [isGenerationRunning, connectModeSourceId, isValidConnectTarget, handleCompleteConnection]);
 
   const handleNodeClick = useCallback((id: string) => {
+    if (isGenerationRunning) return;
     if (connectModeSourceId) {
       if (isValidConnectTarget(id)) {
         handleCompleteConnection(id);
@@ -640,7 +648,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     setActiveNodeId(prev => prev === id ? null : id);
     setEditingNodeId(null);
     setEdgePopover(null);
-  }, [connectModeSourceId, isValidConnectTarget, handleCompleteConnection]);
+  }, [isGenerationRunning, connectModeSourceId, isValidConnectTarget, handleCompleteConnection]);
 
   const handleGenerateChildren = useCallback(async (parentId: string, count?: number) => {
     const parent = consequenceMap.get(parentId);
@@ -729,15 +737,16 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
   }, [consequences, effectiveInput]);
 
   const handleRadialDelete = useCallback((id: string) => {
-    // DAG-aware deletion: only delete a descendant if ALL of its parents
-    // are in the deletion set. Otherwise it survives (just loses this parent link).
+    if (isGenerationRunning) return;
+
+    // ── Branch deletion set (DAG-aware) ──
+    // Only delete a descendant if ALL of its parents are in the deletion set.
     const deletionSet = new Set<string>([id]);
     let changed = true;
     while (changed) {
       changed = false;
       for (const c of consequences) {
         if (deletionSet.has(c.id)) continue;
-        // A node is deleted only if every one of its parents is being deleted
         if (c.parentIds.length > 0 && c.parentIds.every(pid => deletionSet.has(pid))) {
           deletionSet.add(c.id);
           changed = true;
@@ -746,8 +755,8 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     }
 
     // Nodes that have the deleted node as ONE of multiple parents — they survive
-    // but need that parent reference removed
-    const orphanUpdates = new Map<string, string[]>(); // nodeId → new parentIds
+    // but need that parent reference removed (for branch delete mode)
+    const orphanUpdates = new Map<string, string[]>();
     for (const c of consequences) {
       if (deletionSet.has(c.id)) continue;
       if (c.parentIds.some(pid => deletionSet.has(pid))) {
@@ -755,23 +764,39 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       }
     }
 
-    const totalToDelete = deletionSet.size;
-    const descendantCount = totalToDelete - 1;
+    // ── Direct children that would become unattached in single-node delete ──
+    const directChildIds = consequences
+      .filter(c => c.parentIds.includes(id))
+      .map(c => c.id);
 
-    let message: string;
-    if (descendantCount === 0) {
-      message = 'Delete this node?';
-    } else {
-      message = `Delete this node and its branch? This will remove ${totalToDelete} node${totalToDelete > 1 ? 's' : ''} total.`;
-    }
-    if (orphanUpdates.size > 0) {
-      message += ` ${orphanUpdates.size} node${orphanUpdates.size > 1 ? 's' : ''} with other parents will keep their remaining connections.`;
-    }
+    setPendingDelete({
+      id,
+      descendantIds: [...deletionSet].filter(did => did !== id),
+      orphanUpdates,
+      directChildIds,
+    });
+  }, [consequences, isGenerationRunning]);
 
-    setPendingDelete({ id, descendantIds: [...deletionSet].filter(did => did !== id), message, orphanUpdates });
-  }, [consequences]);
+  // ── Single-node delete: remove only this node, children lose this parent ref ──
+  const confirmDeleteSingle = useCallback(() => {
+    if (!pendingDelete) return;
+    const deletedId = pendingDelete.id;
+    setConsequences(prev => prev
+      .filter(c => c.id !== deletedId)
+      .map(c => {
+        // Remove deleted node from any child's parentIds
+        if (c.parentIds.includes(deletedId)) {
+          return { ...c, parentIds: c.parentIds.filter(pid => pid !== deletedId) };
+        }
+        return c;
+      })
+    );
+    setActiveNodeId(null);
+    setPendingDelete(null);
+  }, [pendingDelete]);
 
-  const confirmPendingDelete = useCallback(() => {
+  // ── Branch delete: remove this node and all exclusive descendants ──
+  const confirmDeleteBranch = useCallback(() => {
     if (!pendingDelete) return;
     const idsToRemove = new Set([pendingDelete.id, ...pendingDelete.descendantIds]);
     setConsequences(prev => prev
@@ -808,14 +833,16 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
 
   const handlePaneContextMenu = useCallback((event: React.MouseEvent) => {
     event.preventDefault();
+    if (isGenerationRunning) return;
     const rfInstance = reactFlowInstanceRef.current;
     if (!rfInstance) return;
     // Convert screen coordinates to flow (canvas) coordinates
     const flowPosition = rfInstance.screenToFlowPosition({ x: event.clientX, y: event.clientY });
     setContextMenu({ x: event.clientX, y: event.clientY, flowPosition });
-  }, []);
+  }, [isGenerationRunning]);
 
   const handleContextMenuAddNode = useCallback(() => {
+    if (isGenerationRunning) return;
     if (!contextMenu) return;
     const newId = `manual-${Date.now()}`;
     const newConsequence: Consequence = {
@@ -836,7 +863,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     setEditingNodeId(newId);
     setActiveNodeId(null);
     setContextMenu(null);
-  }, [contextMenu]);
+  }, [contextMenu, isGenerationRunning]);
 
   // ── Track existing positions for pinned/manually-placed nodes ──
   const existingPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
@@ -862,6 +889,27 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     }
     chain.add('seed');
     return chain;
+  }, [consequenceMap]);
+
+  // Check if a node can reach seed by walking all parents (BFS).
+  // Returns false for unattached nodes or floating chains.
+  const isReachableFromSeed = useCallback((nodeId: string): boolean => {
+    const visited = new Set<string>();
+    const queue = [nodeId];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      if (current === 'seed') return true;
+      const node = consequenceMap.get(current);
+      if (node) {
+        for (const pid of node.parentIds) {
+          if (pid === 'seed') return true;
+          if (!visited.has(pid)) queue.push(pid);
+        }
+      }
+    }
+    return false;
   }, [consequenceMap]);
 
   // ── Center viewport on a node, biased toward its ancestor chain ──
@@ -1032,6 +1080,8 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       isPlaceholder: isPlaceholderNode,
       isGenerationInProgress: isGenerationRunning,
       incomingHandle: incomingHandleMapRef.current.get(c.id),
+      // Unattached indicator — node has no path back to seed
+      isUnattached: !isPlaceholderNode && !isReachableFromSeed(c.id),
       // Connect mode visual state
       isConnectSource: connectModeSourceId === c.id,
       isConnectValidTarget: !!connectModeSourceId && connectModeSourceId !== c.id && isValidConnectTarget(c.id),
@@ -1049,7 +1099,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     };
   }, [generationPhase, isHighlighted, showNewHighlight, lastExpansionTime,
       activeNodeId, editingNodeId, isGeneratingChildrenFor, isGeneratingIdeasFor, isGenerationRunning,
-      connectModeSourceId, isValidConnectTarget,
+      connectModeSourceId, isValidConnectTarget, isReachableFromSeed,
       handleNodeClick, handleStartEdit, handleSaveEdit, handleCancelEdit,
       handleAddChild, handleEnterConnectMode, handleGenerateChildren, handleRadialGenerateIdeas, handleRadialDelete]);
 
@@ -1114,7 +1164,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
         return {
           ...n,
           zIndex: hasElevation && elevatedNodes.has(n.id) ? (activeNodeId === n.id ? 1001 : 1000) : undefined,
-          draggable: !c.id.startsWith('placeholder-') && editingNodeId !== c.id,
+          draggable: !c.id.startsWith('placeholder-') && editingNodeId !== c.id && !isGenerationRunning,
           data: buildConsequenceData(c),
         };
       });
@@ -1151,7 +1201,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
           id: c.id,
           type: 'consequence',
           position: pos,
-          draggable: !c.id.startsWith('placeholder-') && !isEditing,
+          draggable: !c.id.startsWith('placeholder-') && !isEditing && !isGenerationRunning,
           zIndex: elevatedZ ?? newNodeZ,
           data: buildConsequenceData(c),
         });
@@ -1221,7 +1271,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       return {
         ...n,
         zIndex: isEditingThis ? 1002 : chainZ,
-        draggable: !c.id.startsWith('placeholder-') && !isEditingThis,
+        draggable: !c.id.startsWith('placeholder-') && !isEditingThis && !isGenerationRunning,
         data: buildConsequenceData(c),
       };
     }));
@@ -2513,11 +2563,13 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
           const srcX = sourceCenterX;
           const srcY = sourceCenterY;
 
-          // Arrow direction: if shift, reverse (target→source)
-          const fromX = isShiftHeld ? mouseX : srcX;
-          const fromY = isShiftHeld ? mouseY : srcY;
-          const toX = isShiftHeld ? srcX : mouseX;
-          const toY = isShiftHeld ? srcY : mouseY;
+          // Arrow shows parent→child direction.
+          // Default: target is parent, source is child → arrow from mouse to source node
+          // Shift: source is parent, target is child → arrow from source node to mouse
+          const fromX = isShiftHeld ? srcX : mouseX;
+          const fromY = isShiftHeld ? srcY : mouseY;
+          const toX = isShiftHeld ? mouseX : srcX;
+          const toY = isShiftHeld ? mouseY : srcY;
 
           return (
             <svg
@@ -2581,7 +2633,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
             color="fg"
           >
             <Cable style={{ width: 16, height: 16, color: isShiftHeld ? '#a78bfa' : '#22d3ee' }} />
-            <Text>{isShiftHeld ? 'Click a node to set as parent' : 'Click a node to set as child'}</Text>
+            <Text>{isShiftHeld ? 'Click a node to set as child' : 'Click a node to set as parent'}</Text>
             <Text fontSize="xs" color="fg.muted" ml={1}>Hold Shift to reverse</Text>
             <Box
               as="button"
@@ -2849,33 +2901,45 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
 
             {/* Body */}
             <Box px={5} py={4}>
-              <Text fontSize="sm" color="fg" mb={4}>
-                {pendingDelete.message}
-              </Text>
-              <Flex gap={2} justify="flex-end">
-                <Button
-                  onClick={cancelPendingDelete}
-                  size="sm"
-                  bg="bg.hover"
-                  color="fg"
-                  rounded="lg"
-                  fontWeight="medium"
-                  _hover={{ bg: 'bg.active' }}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={confirmPendingDelete}
-                  size="sm"
-                  bg="red.500"
-                  color="white"
-                  rounded="lg"
-                  fontWeight="medium"
-                  _hover={{ bg: 'red.600' }}
-                >
-                  Delete
-                </Button>
-              </Flex>
+              {pendingDelete.descendantIds.length === 0 ? (
+                <>
+                  <Text fontSize="sm" color="fg" mb={4}>
+                    Delete this node?
+                    {pendingDelete.directChildIds.length > 0 && (
+                      <Text as="span" color="fg.muted"> Its {pendingDelete.directChildIds.length} direct child{pendingDelete.directChildIds.length > 1 ? 'ren' : ''} will become unconnected.</Text>
+                    )}
+                  </Text>
+                  <Flex gap={2} justify="flex-end">
+                    <Button onClick={cancelPendingDelete} size="sm" bg="bg.hover" color="fg" rounded="lg" fontWeight="medium" _hover={{ bg: 'bg.active' }}>
+                      Cancel
+                    </Button>
+                    <Button onClick={confirmDeleteSingle} size="sm" bg="red.500" color="white" rounded="lg" fontWeight="medium" _hover={{ bg: 'red.600' }}>
+                      Delete
+                    </Button>
+                  </Flex>
+                </>
+              ) : (
+                <>
+                  <Text fontSize="sm" color="fg" mb={1}>
+                    This node has {pendingDelete.descendantIds.length} descendant{pendingDelete.descendantIds.length > 1 ? 's' : ''} in its branch.
+                  </Text>
+                  <Text fontSize="xs" color="fg.muted" mb={4}>
+                    {pendingDelete.directChildIds.length > 0 && `Deleting only this node will leave ${pendingDelete.directChildIds.length} direct child${pendingDelete.directChildIds.length > 1 ? 'ren' : ''} unconnected.`}
+                    {(pendingDelete.orphanUpdates?.size ?? 0) > 0 && ` ${pendingDelete.orphanUpdates!.size} node${pendingDelete.orphanUpdates!.size > 1 ? 's' : ''} with other parents will keep their remaining connections.`}
+                  </Text>
+                  <Flex gap={2} justify="flex-end">
+                    <Button onClick={cancelPendingDelete} size="sm" bg="bg.hover" color="fg" rounded="lg" fontWeight="medium" _hover={{ bg: 'bg.active' }}>
+                      Cancel
+                    </Button>
+                    <Button onClick={confirmDeleteBranch} size="sm" bg="bg.hover" color="red.500" rounded="lg" fontWeight="medium" borderWidth="1px" borderColor="red.200" _hover={{ bg: 'red.50' }}>
+                      Delete branch ({pendingDelete.descendantIds.length + 1})
+                    </Button>
+                    <Button onClick={confirmDeleteSingle} size="sm" bg="red.500" color="white" rounded="lg" fontWeight="medium" _hover={{ bg: 'red.600' }}>
+                      Delete this node
+                    </Button>
+                  </Flex>
+                </>
+              )}
             </Box>
           </Box>
         </Box>

@@ -16,7 +16,7 @@ import {
 } from '../types';
 import {
   Lightbulb, Wrench, Pencil, Plus, Sparkles, Trash2, Loader2,
-  Check, X, Cable,
+  Check, X, Cable, Unlink,
 } from 'lucide-react';
 import { SteepIcon, getSteepMutedBg, getSteepTextColor } from './SteepIcon';
 import { useColorMode } from '../theme/ColorModeProvider';
@@ -685,6 +685,8 @@ export interface ConsequenceNodeData {
   isPlaceholder?: boolean;
   isGenerationInProgress?: boolean;
   incomingHandle?: string;
+  // Unattached indicator
+  isUnattached?: boolean;       // Node has no path back to seed
   // Connect-mode visual state
   isConnectSource?: boolean;    // This node is the source of the connection
   isConnectValidTarget?: boolean; // Valid target — show glow
@@ -723,6 +725,7 @@ function consequenceNodeAreEqual(
     p.isPlaceholder === n.isPlaceholder &&
     p.isGenerationInProgress === n.isGenerationInProgress &&
     p.incomingHandle === n.incomingHandle &&
+    p.isUnattached === n.isUnattached &&
     p.isConnectSource === n.isConnectSource &&
     p.isConnectValidTarget === n.isConnectValidTarget &&
     p.isConnectInvalid === n.isConnectInvalid &&
@@ -747,6 +750,7 @@ export const ConsequenceNode = memo(({ data, draggable }: NodeProps<ConsequenceN
     isPlaceholder,
     isGenerationInProgress,
     incomingHandle,
+    isUnattached,
     isConnectSource,
     isConnectValidTarget,
     isConnectInvalid,
@@ -895,7 +899,7 @@ export const ConsequenceNode = memo(({ data, draggable }: NodeProps<ConsequenceN
         borderColor: isNewlyExpanded ? '#d69e2e' : isSolutionOrIdea ? 'rgba(255,255,255,0.12)' : sentimentColors[consequence.sentiment] || 'var(--chakra-colors-border-muted, #e0e0e0)',
         borderWidth: `${borderWidth}px`,
         width: `${nodeWidth}px`,
-        borderStyle: 'solid',
+        borderStyle: isUnattached ? 'dashed' : 'solid',
         opacity: isDimmed ? 0.35 : (isConnectMode && isConnectInvalid ? 0.4 : 1),
         filter: isDimmed ? 'grayscale(50%)' : (isConnectMode && isConnectInvalid ? 'grayscale(30%)' : 'none'),
         transition: 'opacity 0.3s, filter 0.3s, box-shadow 0.2s ease',
@@ -969,6 +973,30 @@ export const ConsequenceNode = memo(({ data, draggable }: NodeProps<ConsequenceN
             <SteepIcon category={consequence.category} size={16} />
           </div>
         </>
+      )}
+
+      {/* Unattached warning badge — top-right corner */}
+      {isUnattached && (
+        <div
+          style={{
+            position: 'absolute',
+            top: -10,
+            right: -10,
+            width: 28,
+            height: 28,
+            borderRadius: 14,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: '#f59e0b',
+            color: '#fff',
+            zIndex: 10,
+            boxShadow: '0 2px 6px rgba(0,0,0,0.15)',
+          }}
+          title="Not connected to seed"
+        >
+          <Unlink style={{ width: 14, height: 14 }} />
+        </div>
       )}
 
       {/* (Importance indicator is below the text content) */}

@@ -61,9 +61,21 @@ export function computeRadialLayout(
     });
   }
 
-  // Group by order
-  const byOrder: Record<number, Consequence[]> = { 1: [], 2: [], 3: [], 4: [], 5: [] };
+  // Separate unattached nodes (parentIds: []) from connected ones.
+  // Unattached nodes go in the first ring, clustered together.
+  const unattachedNodes: Consequence[] = [];
+  const connectedConsequences: Consequence[] = [];
   for (const c of consequences) {
+    if (c.parentIds.length === 0) {
+      unattachedNodes.push(c);
+    } else {
+      connectedConsequences.push(c);
+    }
+  }
+
+  // Group connected nodes by order
+  const byOrder: Record<number, Consequence[]> = { 1: [], 2: [], 3: [], 4: [], 5: [] };
+  for (const c of connectedConsequences) {
     if (byOrder[c.order]) byOrder[c.order].push(c);
   }
 
@@ -75,31 +87,55 @@ export function computeRadialLayout(
     return Math.max(band.base * spacingMul, radiusFromCircumference);
   };
 
+  // Include unattached nodes in order-1 ring size calculation
   const orderRadii: Record<number, number> = {};
   for (let order = 1; order <= 5; order++) {
-    orderRadii[order] = calculateRadius(byOrder[order].length, ORDER_BANDS[order]);
+    const ringCount = order === 1 ? byOrder[1].length + unattachedNodes.length : byOrder[order].length;
+    orderRadii[order] = calculateRadius(ringCount, ORDER_BANDS[order]);
   }
 
   // ── Order 1: ring around seed ──
-  // Only compute positions for nodes that don't already have one
-  const order1 = byOrder[1];
-  const order1NeedingLayout = order1.filter(c => !positions.has(c.id));
-  const order1Existing = order1.filter(c => positions.has(c.id));
+  // Connected order-1 nodes are placed first, then unattached nodes are
+  // clustered together in the remaining angular space.
+  const order1Connected = byOrder[1];
+  const order1ConnectedNeedingLayout = order1Connected.filter(c => !positions.has(c.id));
+  const order1ConnectedExisting = order1Connected.filter(c => positions.has(c.id));
+  const unattachedNeedingLayout = unattachedNodes.filter(c => !positions.has(c.id));
 
-  if (order1NeedingLayout.length > 0) {
+  // Total nodes sharing this ring (for angle distribution)
+  const totalRingCount = order1Connected.length + unattachedNodes.length;
+
+  if (order1ConnectedNeedingLayout.length > 0 || unattachedNeedingLayout.length > 0) {
     // Find angles already occupied by existing order-1 nodes
-    const occupiedAngles = order1Existing.map(c => {
+    const occupiedAngles = order1ConnectedExisting.map(c => {
+      const pos = positions.get(c.id)!;
+      return Math.atan2(pos.y, pos.x);
+    });
+    // Also count existing unattached nodes that already have positions
+    const unattachedExisting = unattachedNodes.filter(c => positions.has(c.id));
+    const unattachedExistingAngles = unattachedExisting.map(c => {
       const pos = positions.get(c.id)!;
       return Math.atan2(pos.y, pos.x);
     });
 
-    // Distribute new nodes evenly in remaining angular space
-    if (order1Existing.length === 0) {
-      // Fresh layout: distribute all evenly
-      order1NeedingLayout.forEach((c, idx) => {
-        const totalCount = order1.length;
-        const angle = (idx / totalCount) * 2 * Math.PI - Math.PI / 2;
-        const radius = orderRadii[1];
+    if (order1ConnectedExisting.length === 0 && unattachedExisting.length === 0) {
+      // Fresh layout: place connected nodes first, then unattached clustered at the end
+      const connectedCount = order1ConnectedNeedingLayout.length;
+      const unattachedCount = unattachedNeedingLayout.length;
+      const radius = orderRadii[1];
+
+      // Connected nodes get the first portion of the ring
+      order1ConnectedNeedingLayout.forEach((c, idx) => {
+        const angle = (idx / totalRingCount) * 2 * Math.PI - Math.PI / 2;
+        positions.set(c.id, {
+          x: Math.cos(angle) * radius,
+          y: Math.sin(angle) * radius,
+        });
+      });
+
+      // Unattached nodes cluster together right after connected nodes
+      unattachedNeedingLayout.forEach((c, idx) => {
+        const angle = ((connectedCount + idx) / totalRingCount) * 2 * Math.PI - Math.PI / 2;
         positions.set(c.id, {
           x: Math.cos(angle) * radius,
           y: Math.sin(angle) * radius,
@@ -108,22 +144,26 @@ export function computeRadialLayout(
     } else {
       // Incremental: use the SAME radius as existing nodes (not the recalculated one)
       // so new nodes appear on the same ring, not closer/further.
-      const existingRadii = order1Existing.map(c => {
+      const allExisting = [...order1ConnectedExisting, ...unattachedExisting];
+      const existingRadii = allExisting.map(c => {
         const pos = positions.get(c.id)!;
         return Math.sqrt(pos.x * pos.x + pos.y * pos.y);
       });
-      const existingRadius = existingRadii.reduce((a, b) => a + b, 0) / existingRadii.length;
+      const existingRadius = existingRadii.length > 0
+        ? existingRadii.reduce((a, b) => a + b, 0) / existingRadii.length
+        : orderRadii[1];
       const radius = existingRadius > 0 ? existingRadius : orderRadii[1];
 
-      // Find angular gaps between existing nodes and place new ones in the largest gaps
-      const allAngles = [...occupiedAngles].sort((a, b) => a - b);
+      // Find angular gaps between all existing ring nodes and place new ones in largest gaps
+      const allExistingAngles = [...occupiedAngles, ...unattachedExistingAngles];
 
-      const usedAngles = [...allAngles];
+      // Place connected nodes first (largest gap strategy)
+      const usedAngles = [...allExistingAngles];
       let newIdx = 0;
-      order1NeedingLayout.forEach((c) => {
-        // Re-sort and find largest gap each time (like orders 2-5)
+      const allNewNodes = [...order1ConnectedNeedingLayout, ...unattachedNeedingLayout];
+      allNewNodes.forEach((c) => {
         usedAngles.sort((a, b) => a - b);
-        let bestAngle = (newIdx / order1NeedingLayout.length) * 2 * Math.PI - Math.PI / 2; // fallback
+        let bestAngle = (newIdx / allNewNodes.length) * 2 * Math.PI - Math.PI / 2; // fallback
         let bestGapSize = 0;
 
         for (let i = 0; i < usedAngles.length; i++) {
@@ -156,6 +196,8 @@ export function computeRadialLayout(
     if (needingLayout.length === 0) continue;
 
     // Group by primary parent (first in parentIds array)
+    // Unattached nodes are already handled in the order-1 ring, so all nodes
+    // here are guaranteed to have at least one parent.
     const byParent: Record<string, Consequence[]> = {};
     needingLayout.forEach(c => {
       const primaryParent = c.parentIds[0] || 'seed';
