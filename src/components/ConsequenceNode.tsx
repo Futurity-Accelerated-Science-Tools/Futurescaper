@@ -16,7 +16,7 @@ import {
 } from '../types';
 import {
   Lightbulb, Wrench, Pencil, Plus, Sparkles, Trash2, Loader2,
-  Check, X,
+  Check, X, Cable,
 } from 'lucide-react';
 import { SteepIcon, getSteepMutedBg, getSteepTextColor } from './SteepIcon';
 import { useColorMode } from '../theme/ColorModeProvider';
@@ -120,6 +120,7 @@ function CountSelectorPopover({
 function ActionToolbar({
   onEdit,
   onAddChild,
+  onConnect,
   onGenerateChildren,
   onGenerateIdeas,
   onDelete,
@@ -128,6 +129,7 @@ function ActionToolbar({
 }: {
   onEdit: () => void;
   onAddChild: () => void;
+  onConnect: () => void;
   onGenerateChildren: (count?: number) => void;
   onGenerateIdeas: (count?: number) => void;
   onDelete: () => void;
@@ -157,19 +159,20 @@ function ActionToolbar({
       {/* Left column: This node */}
       <Flex direction="column" align="flex-start" gap={0.5} style={{ pointerEvents: 'auto' }}>
         <ActionBtn icon={<Pencil style={{ width: 14, height: 14 }} />} label="Edit" onClick={onEdit} delay={0} />
-        <ActionBtn icon={<Trash2 style={{ width: 14, height: 14 }} />} label="Delete" onClick={onDelete} variant="danger" delay={1} />
+        <ActionBtn icon={<Cable style={{ width: 14, height: 14 }} />} label="Connect" onClick={onConnect} delay={1} />
+        <ActionBtn icon={<Trash2 style={{ width: 14, height: 14 }} />} label="Delete" onClick={onDelete} variant="danger" delay={2} />
       </Flex>
 
       {/* Right column: Create children */}
       <Flex direction="column" align="flex-end" gap={0.5} style={{ pointerEvents: 'auto' }}>
-        <ActionBtn icon={<Plus style={{ width: 14, height: 14 }} />} label="Add Child" onClick={onAddChild} delay={2} />
+        <ActionBtn icon={<Plus style={{ width: 14, height: 14 }} />} label="Add Child" onClick={onAddChild} delay={3} />
         <Box position="relative">
           <ActionBtn
             icon={isGeneratingChildren ? <Loader2 style={{ width: 14, height: 14 }} className="animate-spin" /> : <Sparkles style={{ width: 14, height: 14 }} />}
             label={isGeneratingChildren ? 'Expanding...' : 'AI Expand'}
             onClick={() => setOpenPopover(openPopover === 'expand' ? null : 'expand')}
             disabled={isGeneratingChildren}
-            delay={3}
+            delay={4}
           />
           {openPopover === 'expand' && (
             <CountSelectorPopover
@@ -184,7 +187,7 @@ function ActionToolbar({
             label={isGeneratingIdeas ? 'Generating...' : 'Solve'}
             onClick={() => setOpenPopover(openPopover === 'ideas' ? null : 'ideas')}
             disabled={isGeneratingIdeas}
-            delay={4}
+            delay={5}
           />
           {openPopover === 'ideas' && (
             <CountSelectorPopover
@@ -682,12 +685,18 @@ export interface ConsequenceNodeData {
   isPlaceholder?: boolean;
   isGenerationInProgress?: boolean;
   incomingHandle?: string;
+  // Connect-mode visual state
+  isConnectSource?: boolean;    // This node is the source of the connection
+  isConnectValidTarget?: boolean; // Valid target — show glow
+  isConnectInvalid?: boolean;   // Invalid target (self, cycle) — no glow
+  isConnectMode?: boolean;      // Connect mode is active globally
   // Callbacks
   onClick?: (id: string) => void;
   onStartEdit?: (id: string) => void;
   onSaveEdit?: (id: string, updates: Partial<Consequence>) => void;
   onCancelEdit?: (id: string) => void;
   onAddChild?: (parentId: string) => void;
+  onConnect?: (sourceId: string) => void;
   onGenerateChildren?: (parentId: string, count?: number) => void;
   onGenerateIdeas?: (id: string, count?: number) => void;
   onDelete?: (id: string) => void;
@@ -714,6 +723,10 @@ function consequenceNodeAreEqual(
     p.isPlaceholder === n.isPlaceholder &&
     p.isGenerationInProgress === n.isGenerationInProgress &&
     p.incomingHandle === n.incomingHandle &&
+    p.isConnectSource === n.isConnectSource &&
+    p.isConnectValidTarget === n.isConnectValidTarget &&
+    p.isConnectInvalid === n.isConnectInvalid &&
+    p.isConnectMode === n.isConnectMode &&
     prev.draggable === next.draggable
   );
 }
@@ -734,11 +747,16 @@ export const ConsequenceNode = memo(({ data, draggable }: NodeProps<ConsequenceN
     isPlaceholder,
     isGenerationInProgress,
     incomingHandle,
+    isConnectSource,
+    isConnectValidTarget,
+    isConnectInvalid,
+    isConnectMode,
     onClick,
     onStartEdit,
     onSaveEdit,
     onCancelEdit,
     onAddChild,
+    onConnect,
     onGenerateChildren,
     onGenerateIdeas,
     onDelete,
@@ -854,13 +872,17 @@ export const ConsequenceNode = memo(({ data, draggable }: NodeProps<ConsequenceN
   };
 
   // Shadow/glow
-  const nodeShadow = isSelected
-    ? '0 0 0 2px var(--chakra-colors-bg-canvas, #fff), 0 0 0 4px #3b82f6, 0 4px 6px -1px rgba(0,0,0,0.1)'
-    : isSolutionOrIdea
-      ? '0 2px 16px rgba(0,5,233,0.35)'
-      : isCritical && !isDimmed
-        ? '0 2px 8px rgba(0,0,0,0.1), 0 0 8px rgba(251,191,36,0.3)'
-        : '0 2px 8px rgba(0,0,0,0.1)';
+  const nodeShadow = isConnectValidTarget
+    ? '0 0 0 3px #22d3ee, 0 0 16px rgba(34,211,238,0.5)'
+    : isConnectSource
+      ? '0 0 0 3px #f59e0b, 0 0 16px rgba(245,158,11,0.4)'
+      : isSelected
+        ? '0 0 0 2px var(--chakra-colors-bg-canvas, #fff), 0 0 0 4px #3b82f6, 0 4px 6px -1px rgba(0,0,0,0.1)'
+        : isSolutionOrIdea
+          ? '0 2px 16px rgba(0,5,233,0.35)'
+          : isCritical && !isDimmed
+            ? '0 2px 8px rgba(0,0,0,0.1), 0 0 8px rgba(251,191,36,0.3)'
+            : '0 2px 8px rgba(0,0,0,0.1)';
 
   return (
     <div
@@ -874,24 +896,25 @@ export const ConsequenceNode = memo(({ data, draggable }: NodeProps<ConsequenceN
         borderWidth: `${borderWidth}px`,
         width: `${nodeWidth}px`,
         borderStyle: 'solid',
-        opacity: isDimmed ? 0.35 : 1,
-        filter: isDimmed ? 'grayscale(50%)' : 'none',
+        opacity: isDimmed ? 0.35 : (isConnectMode && isConnectInvalid ? 0.4 : 1),
+        filter: isDimmed ? 'grayscale(50%)' : (isConnectMode && isConnectInvalid ? 'grayscale(30%)' : 'none'),
         transition: 'opacity 0.3s, filter 0.3s, box-shadow 0.2s ease',
         position: 'relative',
         padding: '14px 16px',
         borderRadius: '12px',
         boxShadow: nodeShadow,
-        cursor: 'pointer',
+        cursor: isConnectMode ? (isConnectValidTarget ? 'pointer' : (isConnectSource ? 'grab' : 'not-allowed')) : 'pointer',
         overflow: 'visible',
       }}
     >
       <NodeHandles />
 
       {/* Action Toolbar */}
-      {isSelected && !isDimmed && !isGenerationInProgress && onStartEdit && onAddChild && onGenerateChildren && onGenerateIdeas && onDelete && (
+      {isSelected && !isDimmed && !isGenerationInProgress && onStartEdit && onAddChild && onConnect && onGenerateChildren && onGenerateIdeas && onDelete && (
         <ActionToolbar
           onEdit={() => onStartEdit(consequence.id)}
           onAddChild={() => onAddChild(consequence.id)}
+          onConnect={() => onConnect(consequence.id)}
           onGenerateChildren={(count) => onGenerateChildren(consequence.id, count)}
           onGenerateIdeas={(count) => onGenerateIdeas(consequence.id, count)}
           onDelete={() => onDelete(consequence.id)}
@@ -1094,6 +1117,8 @@ export interface SeedNodeData {
   isSelected?: boolean;
   isGeneratingChildren?: boolean;
   isGenerationInProgress?: boolean;
+  isConnectValidTarget?: boolean;
+  isConnectMode?: boolean;
   onClick?: () => void;
   onAddChild?: () => void;
   onGenerateChildren?: (count?: number) => void;
@@ -1140,7 +1165,13 @@ const SEED_BRAND = '#0005e9';
 const SEED_BRAND_GLOW = 'rgba(0,5,233,0.35)';
 
 export const SeedNode = memo(({ data }: NodeProps<SeedNodeData>) => {
-  const { title, description, isSelected, isGeneratingChildren, isGenerationInProgress, onClick, onAddChild, onGenerateChildren } = data;
+  const { title, description, isSelected, isGeneratingChildren, isGenerationInProgress, isConnectValidTarget, isConnectMode, onClick, onAddChild, onGenerateChildren } = data;
+
+  const seedShadow = isConnectValidTarget
+    ? '0 0 0 3px #22d3ee, 0 0 16px rgba(34,211,238,0.5)'
+    : isSelected
+      ? `0 0 0 2px #fff, 0 0 0 4px ${SEED_BRAND}, 0 0 28px ${SEED_BRAND_GLOW}`
+      : `0 2px 12px rgba(0,5,233,0.25)`;
 
   return (
     <div
@@ -1153,12 +1184,11 @@ export const SeedNode = memo(({ data }: NodeProps<SeedNodeData>) => {
         borderRadius: '12px',
         padding: '20px 24px',
         maxWidth: '300px',
-        cursor: 'pointer',
+        cursor: isConnectMode ? (isConnectValidTarget ? 'pointer' : 'not-allowed') : 'pointer',
         position: 'relative',
-        boxShadow: isSelected
-          ? `0 0 0 2px #fff, 0 0 0 4px ${SEED_BRAND}, 0 0 28px ${SEED_BRAND_GLOW}`
-          : `0 2px 12px rgba(0,5,233,0.25)`,
+        boxShadow: seedShadow,
         fontFamily: 'var(--chakra-fonts-body)',
+        transition: 'box-shadow 0.2s ease',
       }}
     >
       <Handle type="source" position={Position.Right} id="right-source" className="seed-handle" />

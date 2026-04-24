@@ -37,7 +37,7 @@ import { generateConsequences } from '../mockData';
 import { ConsequenceNode, SeedNode, ConsequenceNodeData } from './ConsequenceNode';
 import { SteepIcon, getSteepMutedBg, getSteepTextColor } from './SteepIcon';
 import { ExportPanel } from './ExportPanel';
-import { ArrowLeft, AlertCircle, Lightbulb, FileText, Star, Target, Layers, TrendingUp, TrendingDown, Minus, Loader2, X, Send, Sparkles, Zap, Hammer, LayoutGrid, Filter, ChevronRight, ChevronLeft, Sun, Moon, Eye, EyeOff } from 'lucide-react';
+import { ArrowLeft, AlertCircle, Lightbulb, FileText, Star, Target, Layers, TrendingUp, TrendingDown, Minus, Loader2, X, Send, Sparkles, Zap, Hammer, LayoutGrid, Filter, ChevronRight, ChevronLeft, Sun, Moon, Eye, EyeOff, Cable, Unlink, ArrowRightLeft } from 'lucide-react';
 import { expandNodeConsequences, freePromptExpand, generateSolutionIdeas, generateConsequencesWithAI, generateChildConsequencesWithAI } from '../api/claude';
 import { findRelevantSubjects, RelevantSubject } from '../api/subjects';
 import { RelatedSubjects } from './RelatedSubjects';
@@ -98,6 +98,21 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
 
   const [isGeneratingIdeasFor, setIsGeneratingIdeasFor] = useState<string | null>(null);
 
+  // ── Edge popover state (for disconnect / reverse) ──
+  const [edgePopover, setEdgePopover] = useState<{
+    edgeId: string;
+    parentId: string;
+    childId: string;
+    screenX: number;
+    screenY: number;
+  } | null>(null);
+
+  // ── Connect mode state ──
+  const [connectModeSourceId, setConnectModeSourceId] = useState<string | null>(null);
+  const [connectMousePos, setConnectMousePos] = useState<{ x: number; y: number } | null>(null);
+  const [connectHoveredNodeId, setConnectHoveredNodeId] = useState<string | null>(null);
+  const [isShiftHeld, setIsShiftHeld] = useState(false);
+
   // Verbosity setting — controls AI text length per node
   const [verbosity, setVerbosity] = useState<'concise' | 'detailed'>(input.verbosity || 'concise');
 
@@ -116,6 +131,39 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     const timer = setTimeout(() => setShowNewHighlight(false), 5000);
     return () => clearTimeout(timer);
   }, [showNewHighlight, lastExpansionTime]);
+
+  // ── Connect mode: keyboard listeners (Escape to cancel, Shift for reverse direction) ──
+  useEffect(() => {
+    if (!connectModeSourceId) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setConnectModeSourceId(null);
+        setConnectMousePos(null);
+        setConnectHoveredNodeId(null);
+      }
+      if (e.key === 'Shift') setIsShiftHeld(true);
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') setIsShiftHeld(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      setIsShiftHeld(false);
+    };
+  }, [connectModeSourceId]);
+
+  // ── Connect mode: mouse move tracking ──
+  useEffect(() => {
+    if (!connectModeSourceId) return;
+    const handleMouseMove = (e: MouseEvent) => {
+      setConnectMousePos({ x: e.clientX, y: e.clientY });
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => window.removeEventListener('mousemove', handleMouseMove);
+  }, [connectModeSourceId]);
 
   // Highlight filters - nodes NOT in these filters get dimmed (not hidden)
   const [highlightFilters, setHighlightFilters] = useState({
@@ -267,15 +315,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
 
   // ── Interactive handlers (must be before generateNodesAndEdges) ──
 
-  const handleSeedClick = useCallback(() => {
-    setActiveNodeId(prev => prev === 'seed' ? null : 'seed');
-    setEditingNodeId(null);
-  }, []);
-
-  const handleNodeClick = useCallback((id: string) => {
-    setActiveNodeId(prev => prev === id ? null : id);
-    setEditingNodeId(null);
-  }, []);
+  // handleSeedClick and handleNodeClick moved below connect handlers (see after isValidConnectTarget)
 
   const handleStartEdit = useCallback((id: string) => {
     setEditingNodeId(id);
@@ -377,6 +417,230 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     setEditingNodeId(newId);
     setActiveNodeId(null);
   }, [consequences]);
+
+  // ── Connect mode: cycle detection ──
+  // Returns true if making `parentId` a parent of `childId` would create a cycle.
+  // Walks ALL parents via BFS from `parentId` upward — if we reach `childId`, it's a cycle.
+  const wouldCreateCycle = useCallback((parentId: string, childId: string): boolean => {
+    if (parentId === childId) return true;
+    // Walk ancestors of parentId. If childId is among them, connecting would create a cycle.
+    const visited = new Set<string>();
+    const queue = [parentId];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      if (current === childId) return true;
+      if (current === 'seed') continue;
+      const node = consequenceMap.get(current);
+      if (node) {
+        for (const pid of node.parentIds) {
+          if (!visited.has(pid)) queue.push(pid);
+        }
+      }
+    }
+    return false;
+  }, [consequenceMap]);
+
+  // ── Connect mode: enter ──
+  const handleEnterConnectMode = useCallback((sourceId: string) => {
+    setConnectModeSourceId(sourceId);
+    setConnectHoveredNodeId(null);
+    setActiveNodeId(null); // Deselect so toolbar hides
+  }, []);
+
+  // ── Connect mode: complete connection ──
+  const handleCompleteConnection = useCallback((targetId: string) => {
+    if (!connectModeSourceId) return;
+    const sourceId = connectModeSourceId;
+
+    // Determine direction: normal = source is parent, target is child
+    // Shift reverses: target becomes parent of source
+    const parentId = isShiftHeld ? targetId : sourceId;
+    const childId = isShiftHeld ? sourceId : targetId;
+
+    // Validation
+    if (parentId === childId) return;
+    const child = childId === 'seed' ? null : consequenceMap.get(childId);
+    // Can't make seed a child
+    if (childId === 'seed') return;
+    if (!child) return;
+
+    // Already connected?
+    if (child.parentIds.includes(parentId)) {
+      setConnectModeSourceId(null);
+      setConnectMousePos(null);
+      setConnectHoveredNodeId(null);
+      return;
+    }
+
+    // Cycle check
+    if (wouldCreateCycle(parentId, childId)) {
+      setConnectModeSourceId(null);
+      setConnectMousePos(null);
+      setConnectHoveredNodeId(null);
+      return;
+    }
+
+    // Compute new order: max(parent orders) + 1
+    const parentNode = parentId === 'seed' ? null : consequenceMap.get(parentId);
+    const parentOrder = parentNode ? parentNode.order : 0;
+    const newParentIds = [...child.parentIds.filter(id => id !== ''), parentId];
+    // If child was unattached (parentIds=[]), replace with [parentId]
+    const cleanedParentIds = newParentIds.length > 0 ? newParentIds : [parentId];
+
+    // Calculate order from all parents
+    let maxParentOrder = 0;
+    for (const pid of cleanedParentIds) {
+      if (pid === 'seed') { maxParentOrder = Math.max(maxParentOrder, 0); continue; }
+      const p = consequenceMap.get(pid);
+      if (p) maxParentOrder = Math.max(maxParentOrder, p.order);
+    }
+    const newOrder = Math.min(maxParentOrder + 1, 5) as ConsequenceOrder;
+
+    setConsequences(prev => prev.map(c =>
+      c.id === childId
+        ? { ...c, parentIds: cleanedParentIds, order: newOrder }
+        : c
+    ));
+
+    // Exit connect mode
+    setConnectModeSourceId(null);
+    setConnectMousePos(null);
+    setConnectHoveredNodeId(null);
+  }, [connectModeSourceId, isShiftHeld, consequenceMap, wouldCreateCycle]);
+
+  // ── Connect mode: cancel ──
+  const handleCancelConnectMode = useCallback(() => {
+    setConnectModeSourceId(null);
+    setConnectMousePos(null);
+    setConnectHoveredNodeId(null);
+  }, []);
+
+  // ── Connect mode: check if a node is a valid target ──
+  const isValidConnectTarget = useCallback((nodeId: string): boolean => {
+    if (!connectModeSourceId) return false;
+    if (nodeId === connectModeSourceId) return false;
+
+    const sourceId = connectModeSourceId;
+    const parentId = isShiftHeld ? nodeId : sourceId;
+    const childId = isShiftHeld ? sourceId : nodeId;
+
+    // Can't make seed a child
+    if (childId === 'seed') return false;
+
+    const child = consequenceMap.get(childId);
+    if (!child) return false;
+
+    // Already connected
+    if (child.parentIds.includes(parentId)) return false;
+
+    // Would create cycle
+    if (wouldCreateCycle(parentId, childId)) return false;
+
+    return true;
+  }, [connectModeSourceId, isShiftHeld, consequenceMap, wouldCreateCycle]);
+
+  // ── Edge click handler — shows popover with Disconnect / Reverse ──
+  const handleEdgeClick = useCallback((_event: React.MouseEvent, edge: Edge) => {
+    // Parse edge ID: "edge-{parentId}-{childId}"
+    const parentId = edge.source;
+    const childId = edge.target;
+
+    // Only show popover for consequence edges (not placeholder/generating)
+    if (childId.startsWith('placeholder-')) return;
+
+    // Get screen position from the click event
+    setEdgePopover({
+      edgeId: edge.id,
+      parentId,
+      childId,
+      screenX: _event.clientX,
+      screenY: _event.clientY,
+    });
+  }, []);
+
+  // ── Disconnect: remove a parent from a child's parentIds ──
+  const handleDisconnect = useCallback(() => {
+    if (!edgePopover) return;
+    const { parentId, childId } = edgePopover;
+    setConsequences(prev => prev.map(c => {
+      if (c.id !== childId) return c;
+      const newParentIds = c.parentIds.filter(pid => pid !== parentId);
+      return { ...c, parentIds: newParentIds };
+    }));
+    setEdgePopover(null);
+  }, [edgePopover]);
+
+  // ── Reverse: swap parent↔child direction ──
+  const handleReverseEdge = useCallback(() => {
+    if (!edgePopover) return;
+    const { parentId, childId } = edgePopover;
+
+    // Can't reverse if parent is seed (seed can't become a child)
+    if (parentId === 'seed') {
+      setEdgePopover(null);
+      return;
+    }
+
+    // Check if reversing would create a cycle
+    if (wouldCreateCycle(childId, parentId)) {
+      setEdgePopover(null);
+      return;
+    }
+
+    const parentNode = consequenceMap.get(parentId);
+    const childNode = consequenceMap.get(childId);
+    if (!parentNode || !childNode) { setEdgePopover(null); return; }
+
+    setConsequences(prev => prev.map(c => {
+      if (c.id === childId) {
+        // Remove old parent
+        const newParentIds = c.parentIds.filter(pid => pid !== parentId);
+        return { ...c, parentIds: newParentIds };
+      }
+      if (c.id === parentId) {
+        // Add child as new parent
+        const newParentIds = [...c.parentIds, childId];
+        // Recalculate order
+        let maxParentOrder = 0;
+        for (const pid of newParentIds) {
+          if (pid === 'seed') continue;
+          const p = consequenceMap.get(pid);
+          if (p) maxParentOrder = Math.max(maxParentOrder, p.order);
+        }
+        const newOrder = Math.min(maxParentOrder + 1, 5) as ConsequenceOrder;
+        return { ...c, parentIds: newParentIds, order: newOrder };
+      }
+      return c;
+    }));
+    setEdgePopover(null);
+  }, [edgePopover, consequenceMap, wouldCreateCycle]);
+
+  // ── handleSeedClick & handleNodeClick (after connect handlers to avoid hoisting issues) ──
+  const handleSeedClick = useCallback(() => {
+    if (connectModeSourceId) {
+      if (isValidConnectTarget('seed')) {
+        handleCompleteConnection('seed');
+      }
+      return;
+    }
+    setActiveNodeId(prev => prev === 'seed' ? null : 'seed');
+    setEditingNodeId(null);
+    setEdgePopover(null);
+  }, [connectModeSourceId, isValidConnectTarget, handleCompleteConnection]);
+
+  const handleNodeClick = useCallback((id: string) => {
+    if (connectModeSourceId) {
+      if (isValidConnectTarget(id)) {
+        handleCompleteConnection(id);
+      }
+      return;
+    }
+    setActiveNodeId(prev => prev === id ? null : id);
+    setEditingNodeId(null);
+    setEdgePopover(null);
+  }, [connectModeSourceId, isValidConnectTarget, handleCompleteConnection]);
 
   const handleGenerateChildren = useCallback(async (parentId: string, count?: number) => {
     const parent = consequenceMap.get(parentId);
@@ -527,11 +791,17 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     setPendingDelete(null);
   }, []);
 
-  const handlePaneClick = useCallback(() => {
+  const handlePaneClick = useCallback((event?: React.MouseEvent) => {
+    // If in connect mode, clicking the pane cancels it
+    if (connectModeSourceId) {
+      handleCancelConnectMode();
+      return;
+    }
     setActiveNodeId(null);
     setEditingNodeId(null);
     setContextMenu(null);
-  }, []);
+    setEdgePopover(null);
+  }, [connectModeSourceId, handleCancelConnectMode]);
 
   // ── Right-click context menu for creating unattached nodes ──
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; flowPosition: { x: number; y: number } } | null>(null);
@@ -697,7 +967,9 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
 
     for (const c of allConsequences) {
       // Multi-parent: create one edge per parent
-      const parents = c.parentIds.length > 0 ? c.parentIds : ['seed'];
+      // If parentIds is empty, the node is unattached — no edges drawn
+      const parents = c.parentIds;
+      if (parents.length === 0) continue;
       const childPos = positionMap.get(c.id);
       if (!childPos) continue;
 
@@ -760,19 +1032,26 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       isPlaceholder: isPlaceholderNode,
       isGenerationInProgress: isGenerationRunning,
       incomingHandle: incomingHandleMapRef.current.get(c.id),
+      // Connect mode visual state
+      isConnectSource: connectModeSourceId === c.id,
+      isConnectValidTarget: !!connectModeSourceId && connectModeSourceId !== c.id && isValidConnectTarget(c.id),
+      isConnectInvalid: !!connectModeSourceId && connectModeSourceId !== c.id && !isValidConnectTarget(c.id),
+      isConnectMode: !!connectModeSourceId,
       onClick: handleNodeClick,
       onStartEdit: handleStartEdit,
       onSaveEdit: handleSaveEdit,
       onCancelEdit: handleCancelEdit,
       onAddChild: handleAddChild,
+      onConnect: handleEnterConnectMode,
       onGenerateChildren: handleGenerateChildren,
       onGenerateIdeas: handleRadialGenerateIdeas,
       onDelete: handleRadialDelete,
     };
   }, [generationPhase, isHighlighted, showNewHighlight, lastExpansionTime,
       activeNodeId, editingNodeId, isGeneratingChildrenFor, isGeneratingIdeasFor, isGenerationRunning,
+      connectModeSourceId, isValidConnectTarget,
       handleNodeClick, handleStartEdit, handleSaveEdit, handleCancelEdit,
-      handleAddChild, handleGenerateChildren, handleRadialGenerateIdeas, handleRadialDelete]);
+      handleAddChild, handleEnterConnectMode, handleGenerateChildren, handleRadialGenerateIdeas, handleRadialDelete]);
 
   // ─── STRUCTURAL SYNC — runs when consequences change ───────────
   // Computes positions for new nodes, removes deleted nodes, rebuilds edges.
@@ -822,6 +1101,8 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
               isSelected: activeNodeId === 'seed',
               isGeneratingChildren: isGeneratingChildrenFor === 'seed',
               isGenerationInProgress: isGenerationRunning,
+              isConnectValidTarget: !!connectModeSourceId && isValidConnectTarget('seed'),
+              isConnectMode: !!connectModeSourceId,
               onClick: handleSeedClick,
               onAddChild: handleSeedAddChild,
               onGenerateChildren: handleSeedGenerateChildren,
@@ -950,8 +1231,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     const edgeToConsequence = new Map<string, Consequence>();
     for (const c of consequences) {
       // Multi-parent: register edge IDs for all parents
-      const parents = c.parentIds.length > 0 ? c.parentIds : ['seed'];
-      for (const pid of parents) {
+      for (const pid of c.parentIds) {
         edgeToConsequence.set(`edge-${pid}-${c.id}`, c);
       }
     }
@@ -1064,7 +1344,8 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
 
   useEffect(() => {
     // Build a lightweight fingerprint of consequences to detect structural changes
-    const fingerprint = consequences.map(c => c.id).sort().join(',');
+    // Include parentIds so edge rebuilds happen when connections change (not just adds/removes)
+    const fingerprint = consequences.map(c => `${c.id}:${c.parentIds.join('+')}`).sort().join(',');
     if (fingerprint !== prevConsequenceJsonRef.current) {
       prevConsequenceJsonRef.current = fingerprint;
       syncGraphStructure();
@@ -1169,6 +1450,8 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
               isSelected: activeNodeId === 'seed',
               isGeneratingChildren: isGeneratingChildrenFor === 'seed',
               isGenerationInProgress: isGenerationRunning,
+              isConnectValidTarget: !!connectModeSourceId && isValidConnectTarget('seed'),
+              isConnectMode: !!connectModeSourceId,
               onClick: handleSeedClick,
               onAddChild: handleSeedAddChild,
               onGenerateChildren: handleSeedGenerateChildren,
@@ -1214,6 +1497,8 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
               isSelected: activeNodeId === 'seed',
               isGeneratingChildren: isGeneratingChildrenFor === 'seed',
               isGenerationInProgress: isGenerationRunning,
+              isConnectValidTarget: !!connectModeSourceId && isValidConnectTarget('seed'),
+              isConnectMode: !!connectModeSourceId,
               onClick: handleSeedClick,
               onAddChild: handleSeedAddChild,
               onGenerateChildren: handleSeedGenerateChildren,
@@ -1818,6 +2103,8 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
           onEdgesChange={onEdgesChange}
           nodeTypes={nodeTypes}
           connectionMode={ConnectionMode.Loose}
+          nodesConnectable={false}
+          onEdgeClick={handleEdgeClick}
           onPaneClick={handlePaneClick}
           onPaneContextMenu={handlePaneContextMenu}
           onNodeDragStop={handleNodeDragStop}
@@ -2204,6 +2491,174 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
             maskColor="rgba(var(--node-overlay-inv, 0,0,0), 0.08)"
           />
         </ReactFlow>
+
+        {/* ── Connect mode: SVG tether line overlay ── */}
+        {connectModeSourceId && connectMousePos && mapContainerRef.current && (() => {
+          const containerRect = mapContainerRef.current!.getBoundingClientRect();
+          const rfInstance = reactFlowInstanceRef.current;
+          if (!rfInstance) return null;
+
+          // Find the source node's screen position (center of node)
+          const sourceNode = nodesRef.current.find(n => n.id === connectModeSourceId);
+          if (!sourceNode) return null;
+          const sourceFlowPos = sourceNode.position;
+          // Convert flow position to screen position
+          const viewport = rfInstance.getViewport();
+          const sourceCenterX = sourceFlowPos.x * viewport.zoom + viewport.x + 140 * viewport.zoom; // 280px node / 2
+          const sourceCenterY = sourceFlowPos.y * viewport.zoom + viewport.y + 50 * viewport.zoom;  // approx center
+
+          // Mouse position relative to container
+          const mouseX = connectMousePos.x - containerRect.left;
+          const mouseY = connectMousePos.y - containerRect.top;
+          const srcX = sourceCenterX;
+          const srcY = sourceCenterY;
+
+          // Arrow direction: if shift, reverse (target→source)
+          const fromX = isShiftHeld ? mouseX : srcX;
+          const fromY = isShiftHeld ? mouseY : srcY;
+          const toX = isShiftHeld ? srcX : mouseX;
+          const toY = isShiftHeld ? srcY : mouseY;
+
+          return (
+            <svg
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                height: '100%',
+                pointerEvents: 'none',
+                zIndex: 1000,
+              }}
+            >
+              <defs>
+                <marker
+                  id="connect-arrowhead"
+                  markerWidth="12"
+                  markerHeight="8"
+                  refX="10"
+                  refY="4"
+                  orient="auto"
+                  markerUnits="userSpaceOnUse"
+                >
+                  <path d="M 0 0 L 12 4 L 0 8 Z" fill={isShiftHeld ? '#a78bfa' : '#22d3ee'} />
+                </marker>
+              </defs>
+              <line
+                x1={fromX}
+                y1={fromY}
+                x2={toX}
+                y2={toY}
+                stroke={isShiftHeld ? '#a78bfa' : '#22d3ee'}
+                strokeWidth={2.5}
+                strokeDasharray="8 4"
+                markerEnd="url(#connect-arrowhead)"
+                opacity={0.85}
+              />
+            </svg>
+          );
+        })()}
+
+        {/* Connect mode status banner */}
+        {connectModeSourceId && (
+          <Flex
+            position="absolute"
+            top={3}
+            left="50%"
+            transform="translateX(-50%)"
+            zIndex={1001}
+            bg="bg.canvas"
+            border="1px solid"
+            borderColor={isShiftHeld ? '#a78bfa' : '#22d3ee'}
+            rounded="full"
+            shadow="lg"
+            px={4}
+            py={2}
+            align="center"
+            gap={2}
+            fontSize="sm"
+            fontWeight="medium"
+            color="fg"
+          >
+            <Cable style={{ width: 16, height: 16, color: isShiftHeld ? '#a78bfa' : '#22d3ee' }} />
+            <Text>{isShiftHeld ? 'Click a node to set as parent' : 'Click a node to set as child'}</Text>
+            <Text fontSize="xs" color="fg.muted" ml={1}>Hold Shift to reverse</Text>
+            <Box
+              as="button"
+              ml={2}
+              px={2}
+              py={0.5}
+              rounded="md"
+              fontSize="xs"
+              color="fg.muted"
+              _hover={{ bg: 'bg.hover', color: 'fg' }}
+              cursor="pointer"
+              onClick={handleCancelConnectMode}
+              style={{ border: 'none', background: 'transparent' }}
+            >
+              Esc to cancel
+            </Box>
+          </Flex>
+        )}
+
+        {/* Edge popover — disconnect / reverse */}
+        {edgePopover && (
+          <Box
+            position="fixed"
+            left={`${edgePopover.screenX}px`}
+            top={`${edgePopover.screenY}px`}
+            zIndex={1002}
+            bg="bg.canvas"
+            border="1px solid"
+            borderColor="border.muted"
+            rounded="lg"
+            shadow="lg"
+            overflow="hidden"
+            minW="160px"
+            style={{ transform: 'translate(-50%, -100%) translateY(-8px)' }}
+          >
+            <Box
+              as="button"
+              display="flex"
+              alignItems="center"
+              gap={2}
+              w="full"
+              px={3}
+              py={2}
+              fontSize="sm"
+              color="red.500"
+              bg="transparent"
+              _hover={{ bg: 'red.50' }}
+              cursor="pointer"
+              onClick={handleDisconnect}
+              style={{ border: 'none', textAlign: 'left' }}
+            >
+              <Unlink style={{ width: 14, height: 14 }} />
+              Disconnect
+            </Box>
+            {edgePopover.parentId !== 'seed' && (
+              <Box
+                as="button"
+                display="flex"
+                alignItems="center"
+                gap={2}
+                w="full"
+                px={3}
+                py={2}
+                fontSize="sm"
+                color="fg"
+                bg="transparent"
+                _hover={{ bg: 'bg.hover' }}
+                cursor="pointer"
+                onClick={handleReverseEdge}
+                style={{ border: 'none', textAlign: 'left' }}
+              >
+                <ArrowRightLeft style={{ width: 14, height: 14 }} />
+                Reverse direction
+              </Box>
+            )}
+          </Box>
+        )}
 
         {/* Right-click context menu */}
         {contextMenu && (
