@@ -37,7 +37,7 @@ import { generateConsequences } from '../mockData';
 import { ConsequenceNode, SeedNode, ConsequenceNodeData } from './ConsequenceNode';
 import { SteepIcon, getSteepMutedBg, getSteepTextColor } from './SteepIcon';
 import { ExportPanel } from './ExportPanel';
-import { ArrowLeft, AlertCircle, Lightbulb, FileText, Star, Target, Layers, TrendingUp, TrendingDown, Minus, Loader2, X, Send, Sparkles, Zap, Hammer, LayoutGrid, Filter, ChevronRight, ChevronLeft, Sun, Moon } from 'lucide-react';
+import { ArrowLeft, AlertCircle, Lightbulb, FileText, Star, Target, Layers, TrendingUp, TrendingDown, Minus, Loader2, X, Send, Sparkles, Zap, Hammer, LayoutGrid, Filter, ChevronRight, ChevronLeft, Sun, Moon, Eye, EyeOff } from 'lucide-react';
 import { expandNodeConsequences, freePromptExpand, generateSolutionIdeas, generateConsequencesWithAI, generateChildConsequencesWithAI } from '../api/claude';
 import { findRelevantSubjects, RelevantSubject } from '../api/subjects';
 import { RelatedSubjects } from './RelatedSubjects';
@@ -99,7 +99,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
   const [isGeneratingIdeasFor, setIsGeneratingIdeasFor] = useState<string | null>(null);
 
   // Verbosity setting — controls AI text length per node
-  const [verbosity, setVerbosity] = useState<'concise' | 'normal' | 'detailed'>(input.verbosity || 'normal');
+  const [verbosity, setVerbosity] = useState<'concise' | 'detailed'>(input.verbosity || 'concise');
 
   // Merge local verbosity into input for API calls
   const effectiveInput = useMemo<FutureInput>(
@@ -127,6 +127,14 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     showIdeas: true,
   });
 
+  // Delete confirmation modal state (replaces native confirm() dialog)
+  const [pendingDelete, setPendingDelete] = useState<{
+    id: string;
+    descendantIds: string[];
+    message: string;
+    orphanUpdates?: Map<string, string[]>; // Surviving nodes that need parent refs cleaned
+  } | null>(null);
+
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
 
@@ -144,16 +152,35 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
   const reactFlowInstanceRef = useRef<ReactFlowInstance | null>(null);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
 
-  // Check if a consequence should be highlighted (not dimmed)
+  // Check if a consequence should be highlighted (not dimmed).
+  // Uses the standard faceted-filter pattern: an empty category means
+  // "no restriction on this dimension" (show all), NOT "exclude everything".
+  // This way, clicking "None" then toggling one category feels natural —
+  // the user sees those nodes immediately without needing to also re-enable
+  // every sentiment, probability, etc.
+  //
+  // Special case: when ALL filter arrays are empty AND showIdeas is false
+  // (i.e. the user clicked "None"), nothing should be highlighted.
   const isHighlighted = useCallback((c: Consequence): boolean => {
+    const { categories, sentiments, orders, probabilities, importance, showIdeas } = highlightFilters;
+
+    // If every dimension is empty ("None" state), dim everything
+    const allEmpty = categories.length === 0 && sentiments.length === 0 &&
+      orders.length === 0 && probabilities.length === 0 &&
+      importance.length === 0 && !showIdeas;
+    if (allEmpty) return false;
+
+    // Ideas/solutions: only show when their toggle is on
     const isSolOrIdea = c.nodeType === 'solution' || c.nodeType === 'idea';
-    if (isSolOrIdea && !highlightFilters.showIdeas) return false;
+    if (isSolOrIdea && !showIdeas) return false;
+
+    // Faceted filter: empty array = no restriction on that dimension
     return (
-      highlightFilters.categories.includes(c.category) &&
-      highlightFilters.sentiments.includes(c.sentiment) &&
-      highlightFilters.orders.includes(c.order) &&
-      (!c.probability || highlightFilters.probabilities.includes(c.probability)) &&
-      (!c.importance || highlightFilters.importance.includes(c.importance))
+      (categories.length === 0 || categories.includes(c.category)) &&
+      (sentiments.length === 0 || sentiments.includes(c.sentiment)) &&
+      (orders.length === 0 || orders.includes(c.order)) &&
+      (probabilities.length === 0 || !c.probability || probabilities.includes(c.probability)) &&
+      (importance.length === 0 || !c.importance || importance.includes(c.importance))
     );
   }, [highlightFilters]);
 
@@ -164,10 +191,11 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     return m;
   }, [consequences]);
 
+  // Maps each node to its primary parent (first in parentIds) — used for ancestor chain traversal
   const parentMap = useMemo(() => {
     const m = new Map<string, string>();
     for (const c of consequences) {
-      if (c.parentId) m.set(c.id, c.parentId);
+      if (c.parentIds.length > 0) m.set(c.id, c.parentIds[0]);
     }
     return m;
   }, [consequences]);
@@ -282,7 +310,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       sentiment: 'neutral',
       category: 'social',
       order: 1,
-      parentId: 'seed',
+      parentIds: ['seed'],
       probability: 'plausible',
       importance: 'medium',
       isManual: true,
@@ -309,14 +337,14 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
         sentiment: 'neutral',
         category: 'social',
         order: 1,
-        parentId: 'seed',
+        parentIds: ['seed'],
       });
     }
     setConsequences(prev => [...prev, ...placeholders]);
 
     try {
       // Pass existing first-order children so the AI avoids duplicates
-      const existingFirstOrder = consequences.filter(c => c.order === 1 && c.parentId === 'seed' && c.text);
+      const existingFirstOrder = consequences.filter(c => c.order === 1 && c.parentIds.includes('seed') && c.text);
       const realConsequences = await generateConsequencesWithAI(effectiveInput, 1, existingFirstOrder, effectiveCount);
       setConsequences(prev => [
         ...prev.filter(c => !placeholderIds.includes(c.id)),
@@ -340,7 +368,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       sentiment: 'neutral',
       category: parent?.category || 'social',
       order: newOrder,
-      parentId,
+      parentIds: [parentId],
       probability: 'plausible',
       importance: 'medium',
       isManual: true,
@@ -371,14 +399,14 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
         sentiment: 'neutral',
         category: 'social',
         order: newOrder,
-        parentId,
+        parentIds: [parentId],
       });
     }
     setConsequences(prev => [...prev, ...placeholders]);
 
     try {
       // Pass existing children of this parent so the AI avoids duplicates
-      const existingSiblings = consequences.filter(c => c.parentId === parentId && c.text);
+      const existingSiblings = consequences.filter(c => c.parentIds.includes(parentId) && c.text);
       const realConsequences = await generateChildConsequencesWithAI(effectiveInput, parent, effectiveCount, existingSiblings);
       setConsequences(prev => [
         ...prev.filter(c => !placeholderIds.includes(c.id)),
@@ -413,7 +441,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
         sentiment: 'positive',
         category: targetNode.category,
         order: newOrder,
-        parentId: nodeId,
+        parentIds: [nodeId],
       });
     }
     setConsequences(prev => [...prev, ...placeholders]);
@@ -437,51 +465,134 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
   }, [consequences, effectiveInput]);
 
   const handleRadialDelete = useCallback((id: string) => {
-    // Recursively find all descendants
-    const findDescendants = (parentId: string, all: Consequence[]): string[] => {
-      const children = all.filter(c => c.parentId === parentId);
-      const childIds = children.map(c => c.id);
-      const grandchildIds = children.flatMap(c => findDescendants(c.id, all));
-      return [...childIds, ...grandchildIds];
-    };
-
-    const descendantIds = findDescendants(id, consequences);
-    const totalToDelete = descendantIds.length + 1; // +1 for the node itself
-
-    let message: string;
-    if (descendantIds.length === 0) {
-      message = 'Delete this node?';
-    } else {
-      message = `Delete this node and its entire branch?\n\nThis will remove ${totalToDelete} node${totalToDelete > 1 ? 's' : ''} total (this node + ${descendantIds.length} descendant${descendantIds.length > 1 ? 's' : ''}).`;
+    // DAG-aware deletion: only delete a descendant if ALL of its parents
+    // are in the deletion set. Otherwise it survives (just loses this parent link).
+    const deletionSet = new Set<string>([id]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const c of consequences) {
+        if (deletionSet.has(c.id)) continue;
+        // A node is deleted only if every one of its parents is being deleted
+        if (c.parentIds.length > 0 && c.parentIds.every(pid => deletionSet.has(pid))) {
+          deletionSet.add(c.id);
+          changed = true;
+        }
+      }
     }
 
-    if (!confirm(message)) return;
+    // Nodes that have the deleted node as ONE of multiple parents — they survive
+    // but need that parent reference removed
+    const orphanUpdates = new Map<string, string[]>(); // nodeId → new parentIds
+    for (const c of consequences) {
+      if (deletionSet.has(c.id)) continue;
+      if (c.parentIds.some(pid => deletionSet.has(pid))) {
+        orphanUpdates.set(c.id, c.parentIds.filter(pid => !deletionSet.has(pid)));
+      }
+    }
 
-    const idsToRemove = new Set([id, ...descendantIds]);
-    setConsequences(prev => prev.filter(c => !idsToRemove.has(c.id)));
-    setActiveNodeId(null);
+    const totalToDelete = deletionSet.size;
+    const descendantCount = totalToDelete - 1;
+
+    let message: string;
+    if (descendantCount === 0) {
+      message = 'Delete this node?';
+    } else {
+      message = `Delete this node and its branch? This will remove ${totalToDelete} node${totalToDelete > 1 ? 's' : ''} total.`;
+    }
+    if (orphanUpdates.size > 0) {
+      message += ` ${orphanUpdates.size} node${orphanUpdates.size > 1 ? 's' : ''} with other parents will keep their remaining connections.`;
+    }
+
+    setPendingDelete({ id, descendantIds: [...deletionSet].filter(did => did !== id), message, orphanUpdates });
   }, [consequences]);
+
+  const confirmPendingDelete = useCallback(() => {
+    if (!pendingDelete) return;
+    const idsToRemove = new Set([pendingDelete.id, ...pendingDelete.descendantIds]);
+    setConsequences(prev => prev
+      .filter(c => !idsToRemove.has(c.id))
+      .map(c => {
+        // Update surviving nodes that lost a parent
+        const newParentIds = pendingDelete.orphanUpdates?.get(c.id);
+        if (newParentIds) return { ...c, parentIds: newParentIds };
+        return c;
+      })
+    );
+    setActiveNodeId(null);
+    setPendingDelete(null);
+  }, [pendingDelete]);
+
+  const cancelPendingDelete = useCallback(() => {
+    setPendingDelete(null);
+  }, []);
 
   const handlePaneClick = useCallback(() => {
     setActiveNodeId(null);
     setEditingNodeId(null);
+    setContextMenu(null);
   }, []);
 
-  // Find the full ancestor chain for a node (including the node itself)
+  // ── Right-click context menu for creating unattached nodes ──
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; flowPosition: { x: number; y: number } } | null>(null);
+
+  const handlePaneContextMenu = useCallback((event: React.MouseEvent) => {
+    event.preventDefault();
+    const rfInstance = reactFlowInstanceRef.current;
+    if (!rfInstance) return;
+    // Convert screen coordinates to flow (canvas) coordinates
+    const flowPosition = rfInstance.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    setContextMenu({ x: event.clientX, y: event.clientY, flowPosition });
+  }, []);
+
+  const handleContextMenuAddNode = useCallback(() => {
+    if (!contextMenu) return;
+    const newId = `manual-${Date.now()}`;
+    const newConsequence: Consequence = {
+      id: newId,
+      text: '',
+      sentiment: 'neutral',
+      category: 'social',
+      order: 1,
+      parentIds: [], // Unattached — user will connect it later
+      probability: 'plausible',
+      importance: 'medium',
+      isManual: true,
+      pinned: true, // Stay at placed position
+    };
+    setConsequences(prev => [...prev, newConsequence]);
+    // Store the position so layout places it at the click location
+    existingPositionsRef.current.set(newId, contextMenu.flowPosition);
+    setEditingNodeId(newId);
+    setActiveNodeId(null);
+    setContextMenu(null);
+  }, [contextMenu]);
+
+  // ── Track existing positions for pinned/manually-placed nodes ──
+  const existingPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+
+  // Find the full ancestor chain for a node (including the node itself).
+  // Uses BFS to walk ALL parents (not just primary), so multi-parent nodes
+  // highlight every path back to the seed.
   const getAncestorChain = useCallback((nodeId: string | null): Set<string> => {
     if (!nodeId) return new Set();
     const chain = new Set<string>();
-    chain.add(nodeId);
-    let currentId: string | undefined = nodeId;
-    while (currentId && currentId !== 'seed') {
-      const pid = parentMap.get(currentId);
-      if (!pid) break;
-      chain.add(pid);
-      currentId = pid;
+    const queue: string[] = [nodeId];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (chain.has(current)) continue;
+      chain.add(current);
+      if (current === 'seed') continue;
+      const node = consequenceMap.get(current);
+      if (node) {
+        for (const pid of node.parentIds) {
+          if (!chain.has(pid)) queue.push(pid);
+        }
+      }
     }
     chain.add('seed');
     return chain;
-  }, [parentMap]);
+  }, [consequenceMap]);
 
   // ── Center viewport on a node, biased toward its ancestor chain ──
   // Guarantees the selected node is fully visible with margin.
@@ -585,18 +696,22 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     const ideaEdgeColor = colorMode === 'dark' ? '#e0e0e0' : '#1B1B1D';
 
     for (const c of allConsequences) {
-      const parentId = c.parentId || 'seed';
-      const parentPos = positionMap.get(parentId);
+      // Multi-parent: create one edge per parent
+      const parents = c.parentIds.length > 0 ? c.parentIds : ['seed'];
       const childPos = positionMap.get(c.id);
-      if (!parentPos || !childPos) continue;
+      if (!childPos) continue;
 
       const isDimmed = !isHighlighted(c);
       const isSolOrIdea = c.nodeType === 'solution' || c.nodeType === 'idea';
-      // Idea edges: opposite of bg (fg color). All others: target sentiment color.
       const edgeColor = isSolOrIdea ? ideaEdgeColor : sentimentEdgeColors[c.sentiment] || '#94a3b8';
-      const { sourceHandle, targetHandle } = getOptimalHandles(parentPos, childPos);
-      handleMap.set(c.id, targetHandle);
-      const isElevated = hasElevation && elevatedNodes.has(parentId) && elevatedNodes.has(c.id);
+
+      for (const parentId of parents) {
+        const parentPos = positionMap.get(parentId);
+        if (!parentPos) continue;
+
+        const { sourceHandle, targetHandle } = getOptimalHandles(parentPos, childPos);
+        handleMap.set(c.id, targetHandle);
+        const isElevated = hasElevation && elevatedNodes.has(parentId) && elevatedNodes.has(c.id);
 
       newEdges.push({
         id: `edge-${parentId}-${c.id}`,
@@ -620,7 +735,8 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
         },
         animated: c.id.startsWith('placeholder-') || (generationPhase !== 'complete' && generationPhase !== 'idle' && generationPhase === phaseMap[c.order]),
       });
-    }
+      } // end inner parent loop
+    } // end consequence loop
     incomingHandleMapRef.current = handleMap;
     return newEdges;
   }, [isHighlighted, generationPhase, getAncestorChain, activeNodeId, colorMode]);
@@ -671,6 +787,10 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     for (const n of nodesRef.current) {
       existingPositions.set(n.id, n.position);
     }
+    // Merge in manually placed positions (from right-click node creation)
+    existingPositionsRef.current.forEach((pos, id) => {
+      existingPositions.set(id, pos);
+    });
 
     // Compute layout: new nodes get positions, existing ones keep theirs
     const layoutPositions = computeRadialLayout(consequences, existingPositions, false, verbosity);
@@ -829,7 +949,11 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     // Build a quick edge-id → consequence lookup to avoid O(N) find per edge
     const edgeToConsequence = new Map<string, Consequence>();
     for (const c of consequences) {
-      edgeToConsequence.set(`edge-${c.parentId || 'seed'}-${c.id}`, c);
+      // Multi-parent: register edge IDs for all parents
+      const parents = c.parentIds.length > 0 ? c.parentIds : ['seed'];
+      for (const pid of parents) {
+        edgeToConsequence.set(`edge-${pid}-${c.id}`, c);
+      }
     }
     const phaseMap: Record<number, ExtendedPhase> = {
       1: 'first-order', 2: 'second-order', 3: 'third-order', 4: 'complete', 5: 'complete',
@@ -844,8 +968,9 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
         const isSolOrIdea = c.nodeType === 'solution' || c.nodeType === 'idea';
         const edgeColor = isSolOrIdea ? '#0005e9' : isWildcard ? '#8b5cf6' : 'var(--chakra-colors-fg-muted, #94a3b8)';
         // Elevate edges whose both endpoints are in the ancestor chain
-        const parentId = c.parentId || 'seed';
-        const isElevated = hasElevation && elevatedNodes.has(parentId) && elevatedNodes.has(c.id);
+        // Extract parentId from edge.id format: "edge-{parentId}-{childId}"
+        const edgeParentId = edge.source;
+        const isElevated = hasElevation && elevatedNodes.has(edgeParentId) && elevatedNodes.has(c.id);
         const newZIndex = isElevated ? 999 : undefined;
         const newStrokeWidth = isDimmed ? 1 : (isElevated ? 3 : 2);
         const newOpacity = isDimmed ? 0.2 : (c.order === 1 ? 0.7 : 0.6);
@@ -886,6 +1011,13 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
 
   // ─── Edge rebuild on drag stop ──────────────────────────────────
   const handleNodeDragStop = useCallback((_event: React.MouseEvent, draggedNode: Node) => {
+    // Mark the node as pinned so auto-layout won't reposition it
+    if (draggedNode.id !== 'seed') {
+      existingPositionsRef.current.set(draggedNode.id, { ...draggedNode.position });
+      setConsequences(prev => prev.map(c =>
+        c.id === draggedNode.id ? { ...c, pinned: true } : c
+      ));
+    }
     // Update the pre-focus snapshot so unfocus restores to the post-drag position
     if (preFocusPositionsRef.current) {
       preFocusPositionsRef.current.set(draggedNode.id, { ...draggedNode.position });
@@ -1248,7 +1380,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     }));
   };
 
-  const resetFilters = () => {
+  const selectAllFilters = () => {
     setHighlightFilters({
       categories: ['social', 'technological', 'economic', 'environmental', 'political', 'ethical'],
       sentiments: ['positive', 'negative', 'neutral'],
@@ -1259,6 +1391,35 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     });
     setShowHighImpact(false);
   };
+
+  const selectNoneFilters = () => {
+    setHighlightFilters({
+      categories: [],
+      sentiments: [],
+      orders: [],
+      probabilities: [],
+      importance: [],
+      showIdeas: false,
+    });
+    setShowHighImpact(false);
+  };
+
+  // Compute whether all or no filters are active (for disabling All/None buttons)
+  const allFiltersSelected =
+    highlightFilters.categories.length === 6 &&
+    highlightFilters.sentiments.length === 3 &&
+    highlightFilters.orders.length === 5 &&
+    highlightFilters.probabilities.length === 4 &&
+    highlightFilters.importance.length === 4 &&
+    highlightFilters.showIdeas;
+
+  const noFiltersSelected =
+    highlightFilters.categories.length === 0 &&
+    highlightFilters.sentiments.length === 0 &&
+    highlightFilters.orders.length === 0 &&
+    highlightFilters.probabilities.length === 0 &&
+    highlightFilters.importance.length === 0 &&
+    !highlightFilters.showIdeas;
 
   // Toggle high-impact filter: only probable/plausible + critical/high
   const toggleHighImpact = () => {
@@ -1429,7 +1590,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
             <ArrowLeft style={{ width: 16, height: 16 }} />
             Back
           </Flex>
-          <Text fontWeight="bold" color="fg" mb={1}>{input.title}</Text>
+          <Text fontWeight="bold" color="fg" mb={1} fontFamily="heading">{input.title}</Text>
           <Text fontSize="sm" color="fg.secondary" maxH="128px" overflowY="auto">{input.description}</Text>
         </Box>
 
@@ -1437,7 +1598,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
         <Box p={4} borderBottom="1px solid" borderColor="border.muted">
           <Text fontSize="xs" fontWeight="semibold" color="fg.muted" mb={2}>AI Verbosity</Text>
           <Flex gap={1}>
-            {(['concise', 'normal', 'detailed'] as const).map((v) => (
+            {(['concise', 'detailed'] as const).map((v) => (
               <Box
                 key={v}
                 as="button"
@@ -1509,14 +1670,14 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
             <Flex align="center" gap={2} fontSize="sm" color="fg.secondary">
               <Box as={Hammer} w="16px" h="16px" color="fg.muted" />
               <Box>
-                <Text fontWeight="semibold" color="fg.secondary">Manual Mode</Text>
+                <Text fontWeight="semibold" color="fg.secondary" fontFamily="heading">Manual Mode</Text>
                 <Text fontSize="xs" color="fg.muted" mt={1}>Click the seed node to add children or AI-generate consequences. Click any node for more actions.</Text>
               </Box>
             </Flex>
           ) : (
             <>
               <Flex align="center" justify="space-between" mb={2}>
-                <Text fontSize="sm" fontWeight="semibold" color="fg.secondary">Generation Progress</Text>
+                <Text fontSize="sm" fontWeight="semibold" color="fg.secondary" fontFamily="heading">Generation Progress</Text>
                 <Text fontSize="xs" color="fg.muted">
                   {generationPhase === 'complete' ? `${totalPhases}/${totalPhases}` : `${getPhaseNumber(generationPhase)}/${totalPhases}`}
                 </Text>
@@ -1554,7 +1715,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
               mb={2}
             >
               <Box as={FileText} w="16px" h="16px" color="brand" />
-              <Text fontSize="sm" fontWeight="semibold" color="fg.secondary">TL;DR Summary</Text>
+              <Text fontSize="sm" fontWeight="semibold" color="fg.secondary" fontFamily="heading">TL;DR Summary</Text>
               <Text ml="auto" fontSize="xs" color="fg.muted">{showTLDR ? '▼' : '▶'}</Text>
             </Flex>
             {showTLDR && (
@@ -1658,6 +1819,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
           nodeTypes={nodeTypes}
           connectionMode={ConnectionMode.Loose}
           onPaneClick={handlePaneClick}
+          onPaneContextMenu={handlePaneContextMenu}
           onNodeDragStop={handleNodeDragStop}
           onInit={(instance) => { reactFlowInstanceRef.current = instance; }}
           fitView
@@ -1766,7 +1928,8 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
                     <Box as="button" onClick={() => setFilterPanelCollapsed(false)} p="6px" rounded="md" _hover={{ bg: 'bg.hover' }} color="fg.muted" title="Probability"><Target style={{ width: 16, height: 16 }} /></Box>
                     <Box as="button" onClick={() => setFilterPanelCollapsed(false)} p="6px" rounded="md" _hover={{ bg: 'bg.hover' }} color="fg.muted" title="Importance"><Star style={{ width: 16, height: 16 }} /></Box>
                     <Box w="24px" borderTop="1px solid" borderColor="border.muted" my={1} />
-                    <Box as="button" onClick={resetFilters} p="6px" rounded="md" _hover={{ bg: 'bg.hover' }} color="fg.muted" title="Reset filters"><X style={{ width: 16, height: 16 }} /></Box>
+                    <Box as="button" onClick={selectAllFilters} p="6px" rounded="md" _hover={allFiltersSelected ? {} : { bg: 'bg.hover' }} color="fg.muted" title="Show all" style={allFiltersSelected ? { opacity: 0.3, cursor: 'default' } : {}} disabled={allFiltersSelected}><Eye style={{ width: 16, height: 16 }} /></Box>
+                    <Box as="button" onClick={selectNoneFilters} p="6px" rounded="md" _hover={noFiltersSelected ? {} : { bg: 'bg.hover' }} color="fg.muted" title="Hide all" style={noFiltersSelected ? { opacity: 0.3, cursor: 'default' } : {}} disabled={noFiltersSelected}><EyeOff style={{ width: 16, height: 16 }} /></Box>
                   </Flex>
                 ) : (
                   /* ── Expanded: full filters ── */
@@ -1793,21 +1956,46 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
                       >
                         <Zap style={{ width: 12, height: 12 }} /> Key Only
                       </Flex>
-                      <Box
-                        as="button"
-                        onClick={resetFilters}
-                        px={2}
-                        py={1}
-                        fontSize="10px"
-                        color="fg.muted"
-                        _hover={{ color: 'fg.secondary' }}
-                        bg="bg.hover"
+                      <Flex
+                        align="center"
+                        gap={0}
                         border="1px solid"
                         borderColor="border.muted"
                         rounded="md"
+                        overflow="hidden"
                       >
-                        Reset
-                      </Box>
+                        <Box
+                          as="button"
+                          onClick={selectAllFilters}
+                          px={2}
+                          py={1}
+                          fontSize="10px"
+                          color={allFiltersSelected ? 'fg.muted' : 'fg.secondary'}
+                          fontWeight={allFiltersSelected ? 'normal' : 'medium'}
+                          bg="transparent"
+                          _hover={allFiltersSelected ? {} : { bg: 'bg.hover' }}
+                          style={allFiltersSelected ? { cursor: 'default', opacity: 0.4 } : { cursor: 'pointer' }}
+                          disabled={allFiltersSelected}
+                        >
+                          All
+                        </Box>
+                        <Box w="1px" alignSelf="stretch" bg="border.muted" />
+                        <Box
+                          as="button"
+                          onClick={selectNoneFilters}
+                          px={2}
+                          py={1}
+                          fontSize="10px"
+                          color={noFiltersSelected ? 'fg.muted' : 'fg.secondary'}
+                          fontWeight={noFiltersSelected ? 'normal' : 'medium'}
+                          bg="transparent"
+                          _hover={noFiltersSelected ? {} : { bg: 'bg.hover' }}
+                          style={noFiltersSelected ? { cursor: 'default', opacity: 0.4 } : { cursor: 'pointer' }}
+                          disabled={noFiltersSelected}
+                        >
+                          None
+                        </Box>
+                      </Flex>
                     </Flex>
 
                     {/* STEEP Category */}
@@ -2017,6 +2205,43 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
           />
         </ReactFlow>
 
+        {/* Right-click context menu */}
+        {contextMenu && (
+          <Box
+            position="fixed"
+            left={`${contextMenu.x}px`}
+            top={`${contextMenu.y}px`}
+            zIndex={50}
+            bg="bg.canvas"
+            border="1px solid"
+            borderColor="border.muted"
+            rounded="lg"
+            shadow="lg"
+            overflow="hidden"
+            minW="160px"
+          >
+            <Box
+              as="button"
+              display="flex"
+              alignItems="center"
+              gap={2}
+              w="full"
+              px={3}
+              py={2}
+              fontSize="sm"
+              color="fg"
+              bg="transparent"
+              _hover={{ bg: 'bg.hover' }}
+              cursor="pointer"
+              onClick={handleContextMenuAddNode}
+              style={{ border: 'none', textAlign: 'left' }}
+            >
+              <Text fontSize="md">+</Text>
+              Add node here
+            </Box>
+          </Box>
+        )}
+
         {/* Center screen progress overlay */}
         {generationPhase !== 'complete' && generationPhase !== 'idle' && (
           <Flex position="absolute" inset={0} align="center" justify="center" pointerEvents="none" zIndex={20}>
@@ -2121,6 +2346,85 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       </Box>
 
       </Flex>
+
+      {/* Delete confirmation modal (replaces native confirm() dialog) */}
+      {pendingDelete && (
+        <Box
+          position="fixed"
+          inset={0}
+          zIndex={50}
+          display="flex"
+          alignItems="center"
+          justifyContent="center"
+          onClick={cancelPendingDelete}
+        >
+          {/* Backdrop */}
+          <Box position="absolute" inset={0} bg="blackAlpha.500" backdropFilter="blur(8px)" />
+
+          {/* Modal panel */}
+          <Box
+            position="relative"
+            w={{ base: '90%', md: '420px' }}
+            bg="bg.canvas"
+            rounded="8px"
+            shadow="xl"
+            borderWidth="1px"
+            borderStyle="solid"
+            borderColor="border.emphasized"
+            onClick={(e: React.MouseEvent) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <Flex px={5} py={3} align="center" justify="space-between" borderBottom="1px solid" borderColor="border.muted">
+              <Flex align="center" gap={2}>
+                <AlertCircle style={{ width: 20, height: 20, color: 'var(--chakra-colors-red-500, #e53e3e)' }} />
+                <Text fontSize="md" fontWeight="semibold" color="fg" fontFamily="heading">Confirm Delete</Text>
+              </Flex>
+              <Box
+                as="button"
+                onClick={cancelPendingDelete}
+                p={1.5}
+                rounded="6px"
+                color="fg.muted"
+                _hover={{ color: 'fg', bg: 'bg.hover' }}
+                transition="all 0.2s"
+              >
+                <X style={{ width: 18, height: 18 }} />
+              </Box>
+            </Flex>
+
+            {/* Body */}
+            <Box px={5} py={4}>
+              <Text fontSize="sm" color="fg" mb={4}>
+                {pendingDelete.message}
+              </Text>
+              <Flex gap={2} justify="flex-end">
+                <Button
+                  onClick={cancelPendingDelete}
+                  size="sm"
+                  bg="bg.hover"
+                  color="fg"
+                  rounded="lg"
+                  fontWeight="medium"
+                  _hover={{ bg: 'bg.active' }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={confirmPendingDelete}
+                  size="sm"
+                  bg="red.500"
+                  color="white"
+                  rounded="lg"
+                  fontWeight="medium"
+                  _hover={{ bg: 'red.600' }}
+                >
+                  Delete
+                </Button>
+              </Flex>
+            </Box>
+          </Box>
+        </Box>
+      )}
     </Flex>
   );
 }

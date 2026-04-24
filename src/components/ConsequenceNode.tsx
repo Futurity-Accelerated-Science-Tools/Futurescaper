@@ -37,14 +37,7 @@ function NodeHandles() {
   );
 }
 
-// ─── Action button colors (replacing Tailwind class-based colors) ──
-const ACTION_COLORS: Record<string, { bg: string; hover: string }> = {
-  edit:     { bg: '#3b82f6', hover: '#2563eb' },
-  delete:   { bg: '#ef4444', hover: '#dc2626' },
-  add:      { bg: '#22c55e', hover: '#16a34a' },
-  expand:   { bg: '#a855f7', hover: '#9333ea' },
-  ideas:    { bg: '#f59e0b', hover: '#d97706' },
-};
+// (Action button colors removed — toolbar now uses text-style buttons with no colored backgrounds)
 
 // ─── CountSelectorPopover ─────────────────────────────────────────
 function CountSelectorPopover({
@@ -107,7 +100,7 @@ function CountSelectorPopover({
             backgroundColor: 'transparent',
             cursor: 'pointer',
             transition: 'background 0.12s',
-            fontFamily: "'TT Norms Pro', 'Inter', sans-serif",
+            fontFamily: "'TT Norms Pro Normal', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
           }}
           onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.backgroundColor = 'var(--chakra-colors-bg-hover, #f5f5f5)'; }}
           onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent'; }}
@@ -121,6 +114,9 @@ function CountSelectorPopover({
 }
 
 // ─── ActionToolbar ────────────────────────────────────────────────
+// Below the node, split into two columns:
+//   Left column (aligned left): Edit, Delete — actions on THIS node
+//   Right column (aligned right): Add Child, AI Expand, Solve — create children
 function ActionToolbar({
   onEdit,
   onAddChild,
@@ -141,32 +137,38 @@ function ActionToolbar({
   const [openPopover, setOpenPopover] = useState<'expand' | 'ideas' | null>(null);
 
   return (
-    <Flex
+    <div
       className="node-action-toolbar"
-      position="absolute"
-      align="center"
-      gap={3}
-      zIndex={50}
-      style={{ top: 'calc(100% + 12px)', left: '50%', transform: 'translateX(-50%)' }}
+      style={{
+        position: 'absolute',
+        top: 'calc(100% + 8px)',
+        left: '50%',
+        transform: 'translateX(-50%)',
+        minWidth: '280px',
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'flex-start',
+        zIndex: 50,
+        pointerEvents: 'none',
+      }}
       onClick={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      {/* Management group */}
-      <Flex align="center" bg="bg.muted" backdropFilter="blur(8px)" rounded="xl" shadow="lg" borderWidth="1px" borderColor="border.muted" p={1.5} gap={1.5}>
-        <ActionBtn icon={<Pencil style={{ width: 24, height: 24 }} />} label="Edit" onClick={onEdit} color="edit" delay={0} />
-        <ActionBtn icon={<Trash2 style={{ width: 24, height: 24 }} />} label="Delete" onClick={onDelete} color="delete" delay={1} />
+      {/* Left column: This node */}
+      <Flex direction="column" align="flex-start" gap={0.5} style={{ pointerEvents: 'auto' }}>
+        <ActionBtn icon={<Pencil style={{ width: 14, height: 14 }} />} label="Edit" onClick={onEdit} delay={0} />
+        <ActionBtn icon={<Trash2 style={{ width: 14, height: 14 }} />} label="Delete" onClick={onDelete} variant="danger" delay={1} />
       </Flex>
 
-      {/* Creation group */}
-      <Flex align="center" bg="bg.muted" backdropFilter="blur(8px)" rounded="xl" shadow="lg" borderWidth="1px" borderColor="border.muted" p={1.5} gap={1.5}>
-        <ActionBtn icon={<Plus style={{ width: 24, height: 24 }} />} label="Add Child" onClick={onAddChild} color="add" delay={2} />
+      {/* Right column: Create children */}
+      <Flex direction="column" align="flex-end" gap={0.5} style={{ pointerEvents: 'auto' }}>
+        <ActionBtn icon={<Plus style={{ width: 14, height: 14 }} />} label="Add Child" onClick={onAddChild} delay={2} />
         <Box position="relative">
           <ActionBtn
-            icon={isGeneratingChildren ? <Loader2 style={{ width: 24, height: 24 }} className="animate-spin" /> : <Sparkles style={{ width: 24, height: 24 }} />}
-            label={isGeneratingChildren ? 'Generating...' : 'AI Expand'}
+            icon={isGeneratingChildren ? <Loader2 style={{ width: 14, height: 14 }} className="animate-spin" /> : <Sparkles style={{ width: 14, height: 14 }} />}
+            label={isGeneratingChildren ? 'Expanding...' : 'AI Expand'}
             onClick={() => setOpenPopover(openPopover === 'expand' ? null : 'expand')}
             disabled={isGeneratingChildren}
-            color="expand"
             delay={3}
           />
           {openPopover === 'expand' && (
@@ -178,11 +180,10 @@ function ActionToolbar({
         </Box>
         <Box position="relative">
           <ActionBtn
-            icon={isGeneratingIdeas ? <Loader2 style={{ width: 24, height: 24 }} className="animate-spin" /> : <Lightbulb style={{ width: 24, height: 24 }} />}
-            label={isGeneratingIdeas ? 'Generating...' : 'Ideas'}
+            icon={isGeneratingIdeas ? <Loader2 style={{ width: 14, height: 14 }} className="animate-spin" /> : <Lightbulb style={{ width: 14, height: 14 }} />}
+            label={isGeneratingIdeas ? 'Generating...' : 'Solve'}
             onClick={() => setOpenPopover(openPopover === 'ideas' ? null : 'ideas')}
             disabled={isGeneratingIdeas}
-            color="ideas"
             delay={4}
           />
           {openPopover === 'ideas' && (
@@ -193,69 +194,60 @@ function ActionToolbar({
           )}
         </Box>
       </Flex>
-    </Flex>
+    </div>
   );
 }
 
+// ─── ActionBtn — individual pill-style text+icon button ──────────
 function ActionBtn({
   icon,
   label,
   onClick,
   disabled,
-  color,
+  variant,
   delay,
 }: {
   icon: React.ReactNode;
   label: string;
   onClick: () => void;
   disabled?: boolean;
-  color: string;
+  variant?: 'danger';
   delay: number;
 }) {
-  const colors = ACTION_COLORS[color] || ACTION_COLORS.edit;
+  const isDanger = variant === 'danger';
   return (
     <Box
       as="button"
-      className="node-action-btn action-btn-hoverable"
-      position="relative"
-      w={14}
-      h={14}
-      rounded="xl"
+      className="node-action-btn"
       display="flex"
       alignItems="center"
-      justifyContent="center"
-      bg={colors.bg}
-      color="white"
-      shadow="md"
-      transition="background 0.15s"
+      gap="6px"
+      px={2.5}
+      py={1.5}
+      rounded="lg"
+      fontSize="xs"
+      fontWeight="medium"
+      bg="bg.canvas"
+      color={isDanger ? 'red.500' : 'fg.secondary'}
+      shadow="sm"
+      borderWidth="1px"
+      borderColor="border.muted"
+      transition="all 0.12s"
       cursor={disabled ? 'not-allowed' : 'pointer'}
-      opacity={disabled ? 0.5 : 1}
-      _hover={!disabled ? { bg: colors.hover } : {}}
-      style={{ animationDelay: `${delay * 40}ms` }}
+      opacity={disabled ? 0.4 : 1}
+      whiteSpace="nowrap"
+      _hover={!disabled ? {
+        bg: isDanger ? 'red.50' : 'bg.hover',
+        color: isDanger ? 'red.600' : 'fg',
+        shadow: 'md',
+        borderColor: isDanger ? 'red.200' : 'border.emphasized',
+      } : {}}
+      style={{ animationDelay: `${delay * 30}ms` }}
       onClick={(e: React.MouseEvent) => { e.stopPropagation(); if (!disabled) onClick(); }}
       onPointerDown={(e: React.PointerEvent) => e.stopPropagation()}
     >
       {icon}
-      <Text
-        className="action-btn-tooltip"
-        position="absolute"
-        top="100%"
-        left="50%"
-        transform="translateX(-50%)"
-        mt={1.5}
-        whiteSpace="nowrap"
-        fontSize="2xs"
-        bg="fg"
-        color="bg.canvas"
-        px={1.5}
-        py={0.5}
-        rounded="sm"
-        opacity={0}
-        transition="opacity 0.15s"
-        pointerEvents="none"
-      >
-        {label}
-      </Text>
+      {label}
     </Box>
   );
 }
@@ -489,7 +481,7 @@ function EditModeView({
             backgroundColor: panelInputBg,
             color: panelText,
             border: `1px solid ${panelInputBorder}`,
-            fontFamily: "'TT Norms Pro', 'Inter', sans-serif",
+            fontFamily: "'TT Norms Pro Normal', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
           }}
           _focus={{ borderColor: isSolutionOrIdea ? 'rgba(255,255,255,0.5)' : 'var(--chakra-colors-border-focus, #3b82f6)' }}
           _placeholder={{ color: panelTextMuted }}
@@ -992,7 +984,7 @@ export const ConsequenceNode = memo(({ data, draggable }: NodeProps<ConsequenceN
                 ? <Lightbulb style={{ width: 14, height: 14, color: '#fff', flexShrink: 0 }} />
                 : <Wrench style={{ width: 14, height: 14, color: '#fff', flexShrink: 0 }} />
               }
-              <Text fontWeight="bold" lineHeight="snug" style={{ color: textColor, fontSize: 14, fontFamily: "'TT Norms Pro', 'Inter', sans-serif" }}>
+              <Text fontWeight="bold" lineHeight="snug" style={{ color: textColor, fontSize: 14, fontFamily: "'TT Norms Pro Normal', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" }}>
                 {consequence.title}
               </Text>
             </Flex>
@@ -1018,7 +1010,7 @@ export const ConsequenceNode = memo(({ data, draggable }: NodeProps<ConsequenceN
             marginTop: 8,
             padding: '4px 0',
             borderRadius: 6,
-            fontFamily: "'TT Norms Pro', 'Inter', sans-serif",
+            fontFamily: "'TT Norms Pro Normal', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
             fontSize: 10,
             fontWeight: 700,
             letterSpacing: '0.03em',
@@ -1200,7 +1192,7 @@ export const SeedNode = memo(({ data }: NodeProps<SeedNodeData>) => {
         </Box>
       </Flex>
 
-      <Text fontWeight="bold" fontSize="md" mb={1} style={{ color: '#fff', fontFamily: "'TT Norms Pro', 'Inter', sans-serif" }}>{title}</Text>
+      <Text fontWeight="bold" fontSize="md" mb={1} style={{ color: '#fff', fontFamily: "'TT Norms Pro Normal', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" }}>{title}</Text>
       <Text fontSize="xs" lineHeight="1.4" style={{ color: 'rgba(255,255,255,0.7)' }}>
         {description}
       </Text>

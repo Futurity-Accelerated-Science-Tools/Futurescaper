@@ -134,7 +134,6 @@ const STRATEGY_TABLE: Record<BranchingStrategy, Record<DensityPreset, RawParams>
 
 const VERBOSITY_MULTIPLIER: Record<string, number> = {
   concise: 1.3,
-  normal: 1.0,
   detailed: 0.7,
 };
 
@@ -151,7 +150,7 @@ function scaleCount(base: number, multiplier: number): number {
  */
 export function resolveGenerationParams(
   config: GenerationConfig = DEFAULT_GENERATION_CONFIG,
-  verbosity: 'concise' | 'normal' | 'detailed' = 'normal',
+  verbosity: 'concise' | 'detailed' = 'concise',
 ): ResolvedGenerationParams {
   const raw = STRATEGY_TABLE[config.strategy][config.density];
   const m = VERBOSITY_MULTIPLIER[verbosity] ?? 1.0;
@@ -200,7 +199,7 @@ export function resolveGenerationParams(
  */
 export function estimateNodeCount(
   config: GenerationConfig = DEFAULT_GENERATION_CONFIG,
-  verbosity: 'concise' | 'normal' | 'detailed' = 'normal',
+  verbosity: 'concise' | 'detailed' = 'concise',
 ): number {
   const p = resolveGenerationParams(config, verbosity);
   let total = 0;

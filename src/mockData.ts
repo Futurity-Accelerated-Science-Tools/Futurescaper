@@ -36,7 +36,7 @@ function generateFirstOrder(title: string, description: string): Consequence[] {
       sentiment: 'positive',
       category: 'economic',
       order: 1,
-      parentId: 'seed',
+      parentIds: ['seed'],
     },
     {
       id: 'c1-pos-2',
@@ -44,7 +44,7 @@ function generateFirstOrder(title: string, description: string): Consequence[] {
       sentiment: 'positive',
       category: 'social',
       order: 1,
-      parentId: 'seed',
+      parentIds: ['seed'],
     },
     {
       id: 'c1-neg-1',
@@ -52,7 +52,7 @@ function generateFirstOrder(title: string, description: string): Consequence[] {
       sentiment: 'negative',
       category: 'economic',
       order: 1,
-      parentId: 'seed',
+      parentIds: ['seed'],
     },
     {
       id: 'c1-neg-2',
@@ -60,7 +60,7 @@ function generateFirstOrder(title: string, description: string): Consequence[] {
       sentiment: 'negative',
       category: 'social',
       order: 1,
-      parentId: 'seed',
+      parentIds: ['seed'],
     },
     {
       id: 'c1-neu-1',
@@ -68,7 +68,7 @@ function generateFirstOrder(title: string, description: string): Consequence[] {
       sentiment: 'neutral',
       category: 'political',
       order: 1,
-      parentId: 'seed',
+      parentIds: ['seed'],
     },
   ];
 
@@ -81,7 +81,7 @@ function generateFirstOrder(title: string, description: string): Consequence[] {
         sentiment: 'positive',
         category: 'technological',
         order: 1,
-        parentId: 'seed',
+        parentIds: ['seed'],
       },
       {
         id: 'c1-neg-ai-1',
@@ -89,7 +89,7 @@ function generateFirstOrder(title: string, description: string): Consequence[] {
         sentiment: 'negative',
         category: 'political',
         order: 1,
-        parentId: 'seed',
+        parentIds: ['seed'],
       }
     );
   }
@@ -102,7 +102,7 @@ function generateFirstOrder(title: string, description: string): Consequence[] {
         sentiment: 'positive',
         category: 'environmental',
         order: 1,
-        parentId: 'seed',
+        parentIds: ['seed'],
       },
       {
         id: 'c1-neg-env-1',
@@ -110,7 +110,7 @@ function generateFirstOrder(title: string, description: string): Consequence[] {
         sentiment: 'negative',
         category: 'environmental',
         order: 1,
-        parentId: 'seed',
+        parentIds: ['seed'],
       }
     );
   }
@@ -123,7 +123,7 @@ function generateFirstOrder(title: string, description: string): Consequence[] {
         sentiment: 'positive',
         category: 'social',
         order: 1,
-        parentId: 'seed',
+        parentIds: ['seed'],
       },
       {
         id: 'c1-neg-health-1',
@@ -131,7 +131,7 @@ function generateFirstOrder(title: string, description: string): Consequence[] {
         sentiment: 'negative',
         category: 'social',
         order: 1,
-        parentId: 'seed',
+        parentIds: ['seed'],
       }
     );
   }
@@ -178,7 +178,7 @@ function generateSTEEPConsequences(parent: Consequence, index: number): Conseque
       sentiment,
       category,
       order: 2,
-      parentId: parent.id,
+      parentIds: [parent.id],
     });
   }
 
@@ -307,7 +307,7 @@ function generateThirdOrder(allConsequences: Consequence[]): Consequence[] {
       sentiment: wildCard.sentiment,
       category: wildCard.category,
       order: 3,
-      parentId: parent.id,
+      parentIds: [parent.id],
     });
   }
 

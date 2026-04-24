@@ -136,13 +136,14 @@ export function DetailPanel({ consequence, allConsequences, onClose, onEdit, onD
         ? TrendingDown
         : Minus;
 
-  // Find parent consequence
-  const parent = consequence.parentId && consequence.parentId !== 'seed'
-    ? allConsequences.find(c => c.id === consequence.parentId)
+  // Find parent consequence (use primary parent — first in the array)
+  const primaryParentId = consequence.parentIds.length > 0 ? consequence.parentIds[0] : null;
+  const parent = primaryParentId && primaryParentId !== 'seed'
+    ? allConsequences.find(c => c.id === primaryParentId)
     : null;
 
   // Find child consequences
-  const children = allConsequences.filter(c => c.parentId === consequence.id);
+  const children = allConsequences.filter(c => c.parentIds.includes(consequence.id));
 
   const orderLabels = ['', 'First-Order', 'Second-Order', 'Third-Order'];
 

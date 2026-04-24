@@ -268,7 +268,7 @@ export async function generateComprehensiveFuturescape(
     callbacks.onPhaseStart('solutions');
     callbacks.onProgress('Generating ideas & solutions for key consequences...');
 
-    const childParentIds = new Set(allConsequences.map(c => c.parentId).filter(Boolean));
+    const childParentIds = new Set(allConsequences.flatMap(c => c.parentIds).filter(Boolean));
     const leafNodes = allConsequences.filter(c => !childParentIds.has(c.id) && c.order >= 2);
     const sortedLeaves = [...leafNodes].sort((a, b) => importanceScore(a) - importanceScore(b));
     const keyConsequences = sortedLeaves.slice(0, params.ideas.leafCount);
@@ -353,7 +353,7 @@ Return a JSON array with 3-4 consequences:
       category: item.category || 'social',
       sentiment: item.sentiment || 'neutral',
       order: newOrder,
-      parentId: nodeToExpand.id,
+      parentIds: [nodeToExpand.id],
       probability: item.probability || 'plausible',
       importance: item.importance || 'medium',
       timeFrame: item.timeFrame,
@@ -454,7 +454,7 @@ IMPORTANT: The "title" must be a short, memorable name (2-5 words) that captures
       category: item.category || targetNode.category,
       sentiment: 'positive' as const, // solutions/ideas are inherently positive action
       order: Math.min(targetNode.order + 1, 5) as ConsequenceOrder, // one ring out from parent so layout groups them correctly
-      parentId: targetNode.id,
+      parentIds: [targetNode.id],
       probability: 'plausible' as const,
       importance: item.importance || 'medium',
       timeFrame: item.timeFrame,
@@ -567,7 +567,7 @@ Return ONLY a JSON array:
         category: item.category || 'social',
         sentiment: item.sentiment || 'neutral',
         order,
-        parentId,
+        parentIds: [parentId],
         probability: item.probability || 'plausible',
         importance: item.importance || 'medium',
         timeFrame: item.timeFrame || 'short-term',

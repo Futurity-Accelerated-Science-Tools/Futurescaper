@@ -1,5 +1,20 @@
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
-@import url('https://fonts.cdnfonts.com/css/tt-norms-pro');
+
+/* TT Norms Pro — local @font-face for reliable font-family name matching */
+@font-face {
+  font-family: 'TT Norms Pro Normal';
+  src: url('./assets/TT_Norms_Pro_Normal.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'TT Norms Pro Compact';
+  src: url('./assets/TT_Norms_Pro_Compact_Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
 
 /* ═══════════════════════════════════════════════════════════
    Inverted-node overlay variables
@@ -296,6 +311,12 @@ button:active {
 /* Action button tooltip on hover */
 .action-btn-hoverable:hover .action-btn-tooltip {
   opacity: 1 !important;
+}
+
+/* Share link disabled tooltip on hover */
+.share-link-wrapper:hover .share-link-tooltip {
+  opacity: 1 !important;
+  pointer-events: auto !important;
 }
 
 /* Node hover expansion */

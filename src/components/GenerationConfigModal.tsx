@@ -17,7 +17,7 @@ interface GenerationConfigModalProps {
   onClose: () => void;
   config: GenerationConfig;
   onChange: (config: GenerationConfig) => void;
-  verbosity: 'concise' | 'normal' | 'detailed';
+  verbosity: 'concise' | 'detailed';
 }
 
 // ── Mini SVG Tree Schematics ────────────────────────────────────
@@ -187,7 +187,7 @@ export function GenerationConfigModal({ isOpen, onClose, config, onChange, verbo
       onClick={onClose}
     >
       {/* Backdrop */}
-      <Box position="absolute" inset={0} bg="blackAlpha.500" />
+      <Box position="absolute" inset={0} bg="blackAlpha.500" backdropFilter="blur(8px)" />
 
       {/* Modal panel */}
       <Box
@@ -195,10 +195,11 @@ export function GenerationConfigModal({ isOpen, onClose, config, onChange, verbo
         w={{ base: '95%', md: '640px' }}
         maxH="90vh"
         bg="bg.canvas"
-        rounded="2xl"
-        shadow="2xl"
+        rounded="8px"
+        shadow="xl"
         borderWidth="1px"
-        borderColor="border.muted"
+        borderStyle="solid"
+        borderColor="border.emphasized"
         overflowY="auto"
         onClick={(e: React.MouseEvent) => e.stopPropagation()}
       >
@@ -206,16 +207,16 @@ export function GenerationConfigModal({ isOpen, onClose, config, onChange, verbo
         <Flex px={6} py={4} align="center" justify="space-between" borderBottom="1px solid" borderColor="border.muted">
           <Flex align="center" gap={2}>
             <Box as={Layers} w={5} h={5} color="fg.muted" />
-            <Text fontSize="lg" fontWeight="semibold" color="fg">Configure Generation</Text>
+            <Text fontSize="md" fontWeight="semibold" color="fg" fontFamily="heading">Configure Generation</Text>
           </Flex>
           <Box
             as="button"
             onClick={onClose}
             p={1.5}
-            rounded="md"
+            rounded="6px"
             color="fg.muted"
             _hover={{ color: 'fg', bg: 'bg.hover' }}
-            transition="all 0.15s"
+            transition="all 0.2s"
           >
             <X style={{ width: 18, height: 18 }} />
           </Box>
@@ -225,7 +226,7 @@ export function GenerationConfigModal({ isOpen, onClose, config, onChange, verbo
         <Box px={6} py={5}>
           {/* Branching Strategy */}
           <Box mb={6}>
-            <Text fontSize="sm" fontWeight="semibold" color="fg" mb={3}>Branching Strategy</Text>
+            <Text fontSize="sm" fontWeight="medium" color="fg" mb={3} fontFamily="heading">Branching Strategy</Text>
             <Box display="grid" gridTemplateColumns="repeat(2, 1fr)" gap={3}>
               {strategies.map((s) => {
                 const isActive = config.strategy === s;
@@ -237,22 +238,23 @@ export function GenerationConfigModal({ isOpen, onClose, config, onChange, verbo
                     type="button"
                     onClick={() => onChange({ ...config, strategy: s })}
                     p={4}
-                    rounded="xl"
-                    borderWidth="2px"
-                    transition="all 0.15s"
+                    rounded="8px"
+                    borderWidth="1px"
+                    borderStyle="solid"
+                    transition="all 0.2s"
                     cursor="pointer"
                     textAlign="left"
-                    borderColor={isActive ? 'brand' : 'border.muted'}
-                    bg={isActive ? 'brand/5' : 'transparent'}
+                    borderColor={isActive ? 'fg' : 'border.muted'}
+                    bg={isActive ? 'bg.hover' : 'transparent'}
                     _hover={!isActive ? { borderColor: 'fg.muted', bg: 'bg.hover' } : undefined}
                   >
                     <Box mb={2} opacity={isActive ? 1 : 0.6}>
                       <TreeSvg />
                     </Box>
-                    <Text fontSize="sm" fontWeight="semibold" color={isActive ? 'brand' : 'fg'} mb={0.5}>
+                    <Text fontSize="sm" fontWeight="semibold" color="fg" mb={0.5} fontFamily="heading">
                       {STRATEGY_LABELS[s]}
                     </Text>
-                    <Text fontSize="xs" color="fg.muted" lineHeight="1.4">
+                    <Text fontSize="xs" color="fg.muted" lineHeight="1.4" fontFamily="body">
                       {STRATEGY_DESCRIPTIONS[s]}
                     </Text>
                   </Box>
@@ -263,7 +265,7 @@ export function GenerationConfigModal({ isOpen, onClose, config, onChange, verbo
 
           {/* Density */}
           <Box mb={5}>
-            <Text fontSize="sm" fontWeight="semibold" color="fg" mb={3}>Density</Text>
+            <Text fontSize="sm" fontWeight="medium" color="fg" mb={3} fontFamily="heading">Density</Text>
             <Box display="grid" gridTemplateColumns="repeat(3, 1fr)" gap={2}>
               {densities.map((d) => {
                 const isActive = config.density === d;
@@ -275,21 +277,22 @@ export function GenerationConfigModal({ isOpen, onClose, config, onChange, verbo
                     onClick={() => onChange({ ...config, density: d })}
                     py={3}
                     px={3}
-                    rounded="lg"
-                    borderWidth="2px"
-                    transition="all 0.15s"
+                    rounded="6px"
+                    borderWidth="1px"
+                    borderStyle="solid"
+                    transition="all 0.2s"
                     cursor="pointer"
-                    borderColor={isActive ? 'brand' : 'border.muted'}
-                    bg={isActive ? 'brand/5' : 'transparent'}
-                    _hover={!isActive ? { borderColor: 'fg.muted' } : undefined}
+                    borderColor={isActive ? 'fg' : 'border.muted'}
+                    bg={isActive ? 'bg.hover' : 'transparent'}
+                    _hover={!isActive ? { borderColor: 'fg.muted', bg: 'bg.hover' } : undefined}
                   >
-                    <Text fontSize="sm" fontWeight="semibold" color={isActive ? 'brand' : 'fg'}>
+                    <Text fontSize="sm" fontWeight="semibold" color="fg" fontFamily="heading">
                       {DENSITY_LABELS[d]}
                     </Text>
-                    <Text fontSize="xs" color="fg.muted">
+                    <Text fontSize="xs" color="fg.muted" fontFamily="body">
                       {DENSITY_DESCRIPTIONS[d]}
                     </Text>
-                    <Text fontSize="xs" color="fg.muted" mt={0.5} opacity={0.7}>
+                    <Text fontSize="xs" color="fg.muted" mt={0.5} opacity={0.7} fontFamily="mono">
                       {densityRanges[d]} nodes
                     </Text>
                   </Box>
@@ -305,20 +308,21 @@ export function GenerationConfigModal({ isOpen, onClose, config, onChange, verbo
             gap={2}
             py={3}
             px={4}
-            rounded="lg"
+            rounded="6px"
             bg="bg.hover"
             borderWidth="1px"
+            borderStyle="solid"
             borderColor="border.muted"
             mb={4}
           >
-            <Text fontSize="sm" color="fg.secondary">
+            <Text fontSize="sm" color="fg.secondary" fontFamily="body">
               Estimated output:
             </Text>
-            <Text fontSize="sm" fontWeight="bold" color="fg">
+            <Text fontSize="sm" fontWeight="bold" color="fg" fontFamily="mono">
               ~{estimated} nodes
             </Text>
-            {verbosity !== 'normal' && (
-              <Text fontSize="xs" color="fg.muted">
+            {verbosity === 'detailed' && (
+              <Text fontSize="xs" color="fg.muted" fontFamily="body">
                 (adjusted for {verbosity} detail)
               </Text>
             )}
@@ -330,12 +334,17 @@ export function GenerationConfigModal({ isOpen, onClose, config, onChange, verbo
             onClick={onClose}
             w="full"
             py={3}
-            bg="brand"
-            color="brand.contrast"
-            rounded="xl"
+            bg="fg"
+            color="bg"
+            rounded="6px"
             fontWeight="semibold"
             fontSize="sm"
-            _hover={{ bg: 'brand.hover' }}
+            borderWidth="1px"
+            borderStyle="solid"
+            borderColor="fg"
+            _hover={{ opacity: 0.85 }}
+            transition="all 0.2s"
+            fontFamily="heading"
           >
             Done
           </Button>

@@ -34,7 +34,7 @@ export function GenerationProgress({ phase, onContinue, onPause, isPaused }: Gen
   return (
     <Box bg="bg.canvas" rounded="xl" shadow="sm" borderWidth="1px" borderColor="border.muted" p={4}>
       <Flex align="center" justify="space-between" mb={4}>
-        <Text fontWeight="semibold" color="fg">
+        <Text fontWeight="semibold" color="fg" fontFamily="heading">
           {phase === 'complete' ? 'Generation Complete' : 'Generating Map...'}
         </Text>
         {phase !== 'complete' && (

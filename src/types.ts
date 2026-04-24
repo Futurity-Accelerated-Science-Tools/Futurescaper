@@ -16,7 +16,11 @@ export interface Consequence {
   sentiment: Sentiment;
   category: STEEPCategory;
   order: ConsequenceOrder;
-  parentId: string | null;
+  // Multi-parent support (DAG):
+  //   [] = unattached (floating node, no parents)
+  //   ['seed'] or ['c1-...'] = single parent (normal tree node)
+  //   ['c1-...', 'c2-...'] = multiple parents (DAG node)
+  parentIds: string[];
   timeFrame?: TimeFrame;
   probability?: Probability;
   geographicScope?: GeographicScope;
@@ -24,6 +28,7 @@ export interface Consequence {
   isManual?: boolean; // True if manually added by user
   expandedAt?: number; // Timestamp when added via expansion (free prompt or node expand)
   nodeType?: NodeType; // 'solution' or 'idea' for yellow action nodes, defaults to 'consequence'
+  pinned?: boolean; // True if user manually dragged this node — auto-layout won't reposition it
 }
 
 export interface Solution {
@@ -43,7 +48,7 @@ export interface FutureInput {
   perspective?: string;  // Whose perspective are we analyzing from?
   sourceText?: string;
   sourceUrl?: string;
-  verbosity?: 'concise' | 'normal' | 'detailed';
+  verbosity?: 'concise' | 'detailed';
 }
 
 export interface FuturescapeState {

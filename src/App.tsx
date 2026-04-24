@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { FutureInput, Consequence, Solution, GenerationConfig, DEFAULT_GENERATION_CONFIG } from './types';
 import { InputForm } from './components/InputForm';
 import { FuturescapeMap } from './components/FuturescapeMap';
+import { decodeGraphFromURL } from './shareCodec';
 import './index.css';
 
 // Type for imported data
@@ -18,7 +19,23 @@ function App() {
   const [generationConfig, setGenerationConfig] = useState<GenerationConfig>(DEFAULT_GENERATION_CONFIG);
 
   // Check for embedded export data on mount (from Download HTML export)
+  // Also check for ?d= URL parameter (from Copy Share Link)
   useEffect(() => {
+    // 1. Check URL query parameter first (?d= from Copy Share Link)
+    const params = new URLSearchParams(window.location.search);
+    const urlData = params.get('d');
+    if (urlData) {
+      const decoded = decodeGraphFromURL(urlData);
+      if (decoded) {
+        setInput(decoded.input);
+        setImportedData(decoded);
+        // Clean the URL so it doesn't look messy / re-trigger on refresh
+        window.history.replaceState({}, '', window.location.pathname);
+        return;
+      }
+    }
+
+    // 2. Fall back to embedded script tag (from Download HTML export)
     const embeddedScript = document.getElementById('futurescaper-data');
     if (embeddedScript) {
       try {

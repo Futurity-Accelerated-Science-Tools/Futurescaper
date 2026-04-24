@@ -30,7 +30,7 @@ interface MiroCard {
   geometry: { width: number };
   _meta: {
     futurescapeId: string;
-    parentId?: string | null;
+    parentIds?: string[];
     tagTitles: string[];
   };
 }
@@ -117,7 +117,7 @@ function computeRadialPositions(
     // Group by parent
     const byParent: Record<string, Consequence[]> = {};
     for (const c of items) {
-      const pid = c.parentId || 'seed';
+      const pid = c.parentIds.length > 0 ? c.parentIds[0] : 'seed';
       if (!byParent[pid]) byParent[pid] = [];
       byParent[pid].push(c);
     }
@@ -277,7 +277,7 @@ function buildConsequenceCard(c: Consequence, pos: { x: number; y: number }): Mi
     geometry: { width: MIRO_CARD_W },
     _meta: {
       futurescapeId: c.id,
-      parentId: c.parentId,
+      parentIds: c.parentIds,
       tagTitles: getConsequenceTags(c),
     },
   };
@@ -328,8 +328,8 @@ export function buildUnifiedExport(
   // Build connectors (consequence -> parent)
   const connectors: MiroConnector[] = [];
   for (const c of consequences) {
-    if (c.parentId) {
-      connectors.push({ from: c.parentId, to: c.id });
+    for (const pid of c.parentIds) {
+      connectors.push({ from: pid, to: c.id });
     }
   }
 

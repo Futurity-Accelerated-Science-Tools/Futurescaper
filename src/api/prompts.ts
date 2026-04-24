@@ -91,14 +91,12 @@ When analyzing consequences, consider ALL dimensions:
 
 Always return valid JSON arrays. Be specific, analytical, and comprehensive.`;
 
-export function buildSystemPrompt(verbosity?: 'concise' | 'normal' | 'detailed'): string {
+export function buildSystemPrompt(verbosity?: 'concise' | 'detailed'): string {
   let prompt = SYSTEM_PROMPT;
-  if (verbosity === 'concise') {
-    prompt += '\n\nKeep each item description (consequences, solutions, and ideas) to 1 short sentence (under 15 words).';
-  } else if (verbosity === 'detailed') {
+  if (verbosity === 'detailed') {
     prompt += '\n\nProvide 2-3 detailed sentences per item (consequences, solutions, and ideas) with specific examples and concrete details.';
   } else {
-    prompt += '\n\nKeep each item description (consequences, solutions, and ideas) to 1-2 sentences.';
+    prompt += '\n\nKeep each item description (consequences, solutions, and ideas) to 1 short sentence (under 15 words).';
   }
   return prompt;
 }
@@ -691,7 +689,7 @@ export function parseConsequencesResponse(
           sentiment: item.sentiment as Sentiment,
           category: item.category as STEEPCategory,
           order,
-          parentId,
+          parentIds: [parentId],
           timeFrame: validTimeFrames.includes(item.timeFrame) ? item.timeFrame : 'short-term',
           probability: validProbabilities.includes(item.probability) ? item.probability : 'plausible',
           geographicScope: ['local', 'regional', 'global'].includes(item.geographicScope) ? item.geographicScope : 'regional',

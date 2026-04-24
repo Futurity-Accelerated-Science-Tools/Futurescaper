@@ -32,9 +32,9 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [inputMode, setInputMode] = useState<'idea' | 'url'>('idea');
-  const [verbosity, setVerbosity] = useState<'concise' | 'normal' | 'detailed'>('normal');
+  const [verbosity, setVerbosity] = useState<'concise' | 'detailed'>('concise');
 
-  // Settings drawer fields
+  // Settings modal fields
   const [horizon, setHorizon] = useState<Horizon>('medium');
   const [perspective, setPerspective] = useState('');
   const [sourceText, setSourceText] = useState('');
@@ -53,7 +53,7 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
   const [configModalOpen, setConfigModalOpen] = useState(false);
 
   // UI state
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -211,11 +211,11 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
   const perspectiveQuickPicks = ['General Public', 'Business Owners', 'Workers/Employees', 'Government', 'Investors', 'Environment'];
 
   return (
-    <Flex direction="column" minH="100vh">
-      {/* ── Top Bar (matches FuturescapeMap) ── */}
+    <Flex direction="column" minH="100vh" bg="bg">
+      {/* ── Top Bar (matches FAST navbar pattern) ── */}
       <Flex
-        h="40px"
-        px={4}
+        h="48px"
+        px={5}
         align="center"
         justify="space-between"
         bg="bg.canvas"
@@ -223,7 +223,14 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
         borderColor="border.muted"
         flexShrink={0}
       >
-        <Text fontSize="xs" fontWeight="semibold" color="fg.muted" letterSpacing="wider" textTransform="uppercase">
+        <Text
+          fontSize="xs"
+          fontWeight="semibold"
+          color="fg.muted"
+          letterSpacing="wider"
+          textTransform="uppercase"
+          fontFamily="heading"
+        >
           Futurescaper
         </Text>
         <Box
@@ -233,7 +240,7 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
           rounded="md"
           color="fg.muted"
           _hover={{ color: 'fg', bg: 'bg.hover' }}
-          transition="all 0.15s"
+          transition="all 0.2s"
           title={colorMode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
         >
           {colorMode === 'light' ? <Moon style={{ width: 14, height: 14 }} /> : <Sun style={{ width: 14, height: 14 }} />}
@@ -241,19 +248,32 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
       </Flex>
 
       {/* ── Main Content ── */}
-      <Box flex={1} bgGradient="to-br" gradientFrom="bg.hover" gradientTo="bg.active" p={{ base: 6, md: 12 }}>
-        <Box maxW="2xl" mx="auto">
+      <Box flex={1} py={{ base: 8, md: 12 }} px={{ base: 5, md: 8 }}>
+        <Box maxW="xl" mx="auto">
           {/* Header */}
           <Box mb={8}>
-            <Flex align="center" gap={3} mb={2}>
-              <Flex w={10} h={10} rounded="lg" bg="brand" align="center" justify="center">
-                <Box as={Sparkles} w={5} h={5} color="brand.contrast" />
+            <Flex align="center" gap={3} mb={3}>
+              <Flex
+                w={10}
+                h={10}
+                rounded="8px"
+                bg="fg"
+                align="center"
+                justify="center"
+              >
+                <Box as={Sparkles} w={5} h={5} color="bg" />
               </Flex>
-              <Text as="h1" fontSize="3xl" fontWeight="bold" color="fg">
-                Futurescape
+              <Text
+                as="h1"
+                fontSize="2xl"
+                fontWeight="bold"
+                color="fg"
+                fontFamily="heading"
+              >
+                Futurescaper
               </Text>
             </Flex>
-            <Text color="fg.secondary" fontSize="md">
+            <Text color="fg.secondary" fontSize="sm" fontFamily="body" lineHeight="1.6">
               Map consequences across Social, Technological, Economic, Environmental, Political &amp; Ethical dimensions.
             </Text>
           </Box>
@@ -266,19 +286,21 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
               flex={1}
               py={2.5}
               px={4}
-              rounded="lg"
-              borderWidth="2px"
-              transition="all"
+              rounded="6px"
+              borderWidth="1px"
+              borderStyle="solid"
+              transition="all 0.2s"
               display="flex"
               alignItems="center"
               justifyContent="center"
               gap={2}
-              borderColor={inputMode === 'idea' ? 'brand' : 'border.muted'}
-              bg={inputMode === 'idea' ? 'brand/5' : 'transparent'}
-              color={inputMode === 'idea' ? 'brand' : 'fg.secondary'}
-              _hover={inputMode !== 'idea' ? { borderColor: 'border.muted' } : undefined}
+              borderColor={inputMode === 'idea' ? 'fg' : 'border.muted'}
+              bg={inputMode === 'idea' ? 'fg' : 'transparent'}
+              color={inputMode === 'idea' ? 'bg' : 'fg.secondary'}
+              _hover={inputMode !== 'idea' ? { bg: 'bg.hover', borderColor: 'fg.muted' } : undefined}
               variant="outline"
               fontSize="sm"
+              fontFamily="heading"
             >
               <Box as={Zap} w={4} h={4} />
               Describe an Idea
@@ -289,19 +311,21 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
               flex={1}
               py={2.5}
               px={4}
-              rounded="lg"
-              borderWidth="2px"
-              transition="all"
+              rounded="6px"
+              borderWidth="1px"
+              borderStyle="solid"
+              transition="all 0.2s"
               display="flex"
               alignItems="center"
               justifyContent="center"
               gap={2}
-              borderColor={inputMode === 'url' ? 'brand' : 'border.muted'}
-              bg={inputMode === 'url' ? 'brand/5' : 'transparent'}
-              color={inputMode === 'url' ? 'brand' : 'fg.secondary'}
-              _hover={inputMode !== 'url' ? { borderColor: 'border.muted' } : undefined}
+              borderColor={inputMode === 'url' ? 'fg' : 'border.muted'}
+              bg={inputMode === 'url' ? 'fg' : 'transparent'}
+              color={inputMode === 'url' ? 'bg' : 'fg.secondary'}
+              _hover={inputMode !== 'url' ? { bg: 'bg.hover', borderColor: 'fg.muted' } : undefined}
               variant="outline"
               fontSize="sm"
+              fontFamily="heading"
             >
               <Box as={Globe} w={4} h={4} />
               Analyze from URL
@@ -311,27 +335,32 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
           {/* Example pills (idea mode only) */}
           {inputMode === 'idea' && (
             <Box mb={5}>
-              <Text fontSize="xs" color="fg.muted" mb={2} fontWeight="medium">Try an example:</Text>
+              <Text fontSize="2xs" color="fg.muted" mb={2} fontWeight="medium" textTransform="uppercase" letterSpacing="wide" fontFamily="heading">
+                Try an example
+              </Text>
               <Flex flexWrap="wrap" gap={2}>
                 {exampleIdeas.map((example, idx) => (
-                  <Button
+                  <Box
                     key={idx}
+                    as="button"
                     type="button"
                     onClick={() => fillExample(example)}
                     px={3}
                     py={1.5}
                     fontSize="xs"
                     bg="bg.canvas"
-                    _hover={{ bg: 'brand', color: 'brand.contrast' }}
+                    _hover={{ bg: 'fg', color: 'bg' }}
                     borderWidth="1px"
+                    borderStyle="solid"
                     borderColor="border.muted"
                     rounded="full"
                     color="fg.secondary"
-                    transition="colors"
-                    variant="outline"
+                    transition="all 0.2s"
+                    cursor="pointer"
+                    fontFamily="body"
                   >
                     {example.title}
-                  </Button>
+                  </Box>
                 ))}
               </Flex>
             </Box>
@@ -341,9 +370,23 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
             <Flex direction="column" gap={4}>
               {/* URL input (url mode only) */}
               {inputMode === 'url' && (
-                <Box bg="bg.canvas" rounded="xl" shadow="sm" borderWidth="1px" borderColor="border.muted" p={5}>
-                  <Text as="label" display="block" fontSize="sm" fontWeight="semibold" color="fg" mb={2}>
-                    <Box as={Link} w={4} h={4} display="inline" mr={2} />
+                <Box
+                  bg="bg.canvas"
+                  rounded="8px"
+                  borderWidth="1px"
+                  borderStyle="solid"
+                  borderColor="border.muted"
+                  p={5}
+                >
+                  <Text
+                    as="label"
+                    display="block"
+                    fontSize="sm"
+                    fontWeight="medium"
+                    color="fg"
+                    mb={2}
+                    fontFamily="heading"
+                  >
                     Source URL
                   </Text>
                   <Flex gap={2}>
@@ -355,11 +398,15 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
                       flex={1}
                       px={4}
                       py={2.5}
-                      rounded="lg"
+                      rounded="6px"
                       borderColor="border.muted"
-                      _focus={{ borderColor: 'border.focus', ring: '2px', ringColor: 'brand/20' }}
+                      bg="bg"
+                      color="fg"
+                      _placeholder={{ color: 'fg.muted' }}
+                      _focus={{ borderColor: 'border.focus', boxShadow: '0 0 0 1px var(--chakra-colors-border-focus)' }}
                       outline="none"
                       fontSize="sm"
+                      fontFamily="body"
                     />
                     <Button
                       type="button"
@@ -367,27 +414,47 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
                       disabled={!sourceUrl.trim() || isProcessingUrl}
                       px={4}
                       py={2.5}
-                      bg="bg.active"
-                      color="fg"
-                      rounded="lg"
-                      _hover={{ bg: 'bg.active' }}
-                      _disabled={{ opacity: 0.5 }}
+                      bg="fg"
+                      color="bg"
+                      rounded="6px"
+                      borderWidth="1px"
+                      borderStyle="solid"
+                      borderColor="fg"
+                      _hover={{ opacity: 0.85 }}
+                      _disabled={{ opacity: 0.5, cursor: 'not-allowed' }}
                       display="flex"
                       alignItems="center"
                       gap={2}
                       fontSize="sm"
+                      fontFamily="heading"
+                      transition="all 0.2s"
                     >
                       {isProcessingUrl ? <Box as={Loader2} w={4} h={4} animation="spin" /> : <Box as={ArrowRight} w={4} h={4} />}
                       Fetch
                     </Button>
                   </Flex>
-                  {urlError && <Text mt={2} fontSize="xs" color="orange.600">{urlError}</Text>}
+                  {urlError && <Text mt={2} fontSize="xs" color="fg.error">{urlError}</Text>}
                 </Box>
               )}
 
               {/* Title */}
-              <Box bg="bg.canvas" rounded="xl" shadow="sm" borderWidth="1px" borderColor="border.muted" p={5}>
-                <Text as="label" display="block" fontSize="sm" fontWeight="semibold" color="fg" mb={2}>
+              <Box
+                bg="bg.canvas"
+                rounded="8px"
+                borderWidth="1px"
+                borderStyle="solid"
+                borderColor="border.muted"
+                p={5}
+              >
+                <Text
+                  as="label"
+                  display="block"
+                  fontSize="sm"
+                  fontWeight="medium"
+                  color="fg"
+                  mb={2}
+                  fontFamily="heading"
+                >
                   {inputMode === 'url' ? 'Title for this analysis' : 'What scenario or event are you analyzing?'}
                 </Text>
                 <Input
@@ -400,19 +467,39 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
                   w="full"
                   px={4}
                   py={3}
-                  rounded="lg"
+                  rounded="6px"
                   borderColor="border.muted"
-                  _focus={{ borderColor: 'border.focus', ring: '2px', ringColor: 'brand/20' }}
+                  bg="bg"
+                  color="fg"
+                  _placeholder={{ color: 'fg.muted' }}
+                  _focus={{ borderColor: 'border.focus', boxShadow: '0 0 0 1px var(--chakra-colors-border-focus)' }}
                   outline="none"
                   fontSize="md"
+                  fontFamily="body"
                   required
                 />
               </Box>
 
               {/* Description */}
-              <Box bg="bg.canvas" rounded="xl" shadow="sm" borderWidth="1px" borderColor="border.muted" p={5}>
-                <Text as="label" display="block" fontSize="sm" fontWeight="semibold" color="fg" mb={2}>
-                  Describe the scenario <Text as="span" color="fg.muted" fontWeight="normal">(optional)</Text>
+              <Box
+                bg="bg.canvas"
+                rounded="8px"
+                borderWidth="1px"
+                borderStyle="solid"
+                borderColor="border.muted"
+                p={5}
+              >
+                <Text
+                  as="label"
+                  display="block"
+                  fontSize="sm"
+                  fontWeight="medium"
+                  color="fg"
+                  mb={2}
+                  fontFamily="heading"
+                >
+                  Describe the scenario{' '}
+                  <Text as="span" color="fg.muted" fontWeight="normal">(optional)</Text>
                 </Text>
                 <Textarea
                   value={description}
@@ -422,23 +509,35 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
                   w="full"
                   px={4}
                   py={3}
-                  rounded="lg"
+                  rounded="6px"
                   borderColor="border.muted"
-                  _focus={{ borderColor: 'border.focus', ring: '2px', ringColor: 'brand/20' }}
+                  bg="bg"
+                  color="fg"
+                  _placeholder={{ color: 'fg.muted' }}
+                  _focus={{ borderColor: 'border.focus', boxShadow: '0 0 0 1px var(--chakra-colors-border-focus)' }}
                   outline="none"
                   resize="none"
                   fontSize="sm"
+                  fontFamily="body"
                 />
               </Box>
 
               {/* AI Verbosity */}
-              <Box bg="bg.canvas" rounded="xl" shadow="sm" borderWidth="1px" borderColor="border.muted" px={5} py={4}>
+              <Box
+                bg="bg.canvas"
+                rounded="8px"
+                borderWidth="1px"
+                borderStyle="solid"
+                borderColor="border.muted"
+                px={5}
+                py={4}
+              >
                 <Flex align="center" justify="space-between">
-                  <Text fontSize="sm" fontWeight="semibold" color="fg">
+                  <Text fontSize="sm" fontWeight="medium" color="fg" fontFamily="heading">
                     AI Detail Level
                   </Text>
-                  <Flex gap={1} bg="bg.hover" rounded="lg" p={0.5}>
-                    {(['concise', 'normal', 'detailed'] as const).map((v) => (
+                  <Flex gap={1} bg="bg.hover" rounded="6px" p={0.5}>
+                    {(['concise', 'detailed'] as const).map((v) => (
                       <Box
                         as="button"
                         key={v}
@@ -446,24 +545,24 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
                         onClick={() => setVerbosity(v)}
                         px={3}
                         py={1.5}
-                        rounded="md"
+                        rounded="4px"
                         fontSize="xs"
                         fontWeight={verbosity === v ? 'semibold' : 'normal'}
                         cursor="pointer"
-                        transition="all 0.15s"
+                        transition="all 0.2s"
                         bg={verbosity === v ? 'bg.canvas' : 'transparent'}
                         color={verbosity === v ? 'fg' : 'fg.muted'}
                         shadow={verbosity === v ? 'sm' : 'none'}
                         _hover={verbosity !== v ? { color: 'fg.secondary' } : undefined}
+                        fontFamily="heading"
                       >
                         {v.charAt(0).toUpperCase() + v.slice(1)}
                       </Box>
                     ))}
                   </Flex>
                 </Flex>
-                <Text mt={1.5} fontSize="xs" color="fg.muted">
+                <Text mt={1.5} fontSize="xs" color="fg.muted" fontFamily="body">
                   {verbosity === 'concise' && 'Short, punchy descriptions — 1 sentence per node'}
-                  {verbosity === 'normal' && 'Balanced detail — 1-2 sentences per node'}
                   {verbosity === 'detailed' && 'Rich analysis — 2-3 sentences with specific examples'}
                 </Text>
               </Box>
@@ -475,21 +574,21 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
                 onClick={() => setConfigModalOpen(true)}
                 w="full"
                 bg="bg.canvas"
-                rounded="xl"
-                shadow="sm"
+                rounded="8px"
                 borderWidth="1px"
+                borderStyle="solid"
                 borderColor="border.muted"
                 px={5}
                 py={3.5}
                 cursor="pointer"
                 _hover={{ borderColor: 'fg.muted', bg: 'bg.hover' }}
-                transition="all 0.15s"
+                transition="all 0.2s"
                 textAlign="left"
               >
                 <Flex align="center" justify="space-between">
                   <Flex align="center" gap={2}>
                     <Box as={Layers} w={4} h={4} color="fg.muted" />
-                    <Text fontSize="sm" color="fg.secondary">
+                    <Text fontSize="sm" color="fg.secondary" fontFamily="body">
                       {STRATEGY_LABELS[generationConfig.strategy]} · {DENSITY_LABELS[generationConfig.density]} (~{estimateNodeCount(generationConfig, verbosity)} nodes)
                     </Text>
                   </Flex>
@@ -497,28 +596,28 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
                 </Flex>
               </Box>
 
-              {/* Settings summary bar — click to open drawer */}
+              {/* Settings summary bar — click to open modal */}
               <Box
                 as="button"
                 type="button"
-                onClick={() => setDrawerOpen(true)}
+                onClick={() => setSettingsModalOpen(true)}
                 w="full"
                 bg="bg.canvas"
-                rounded="xl"
-                shadow="sm"
+                rounded="8px"
                 borderWidth="1px"
+                borderStyle="solid"
                 borderColor="border.muted"
                 px={5}
                 py={3.5}
                 cursor="pointer"
                 _hover={{ borderColor: 'fg.muted', bg: 'bg.hover' }}
-                transition="all 0.15s"
+                transition="all 0.2s"
                 textAlign="left"
               >
                 <Flex align="center" justify="space-between">
                   <Flex align="center" gap={2}>
                     <Box as={Settings} w={4} h={4} color="fg.muted" />
-                    <Text fontSize="sm" color="fg.secondary">
+                    <Text fontSize="sm" color="fg.secondary" fontFamily="body">
                       {settingsSummary()}
                     </Text>
                   </Flex>
@@ -534,18 +633,22 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
                   w="full"
                   py={4}
                   px={6}
-                  bg="brand"
-                  color="brand.contrast"
-                  rounded="xl"
+                  bg="fg"
+                  color="bg"
+                  rounded="6px"
                   fontWeight="semibold"
                   fontSize="md"
-                  _hover={{ bg: 'brand.hover' }}
-                  transition="colors"
+                  borderWidth="1px"
+                  borderStyle="solid"
+                  borderColor="fg"
+                  _hover={{ opacity: 0.85 }}
+                  transition="all 0.2s"
                   _disabled={{ opacity: 0.5, cursor: 'not-allowed' }}
                   display="flex"
                   alignItems="center"
                   justifyContent="center"
                   gap={2}
+                  fontFamily="heading"
                 >
                   {isResearching ? (
                     <>
@@ -569,21 +672,23 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
                     w="full"
                     py={3}
                     px={6}
-                    bg="bg.canvas"
-                    borderWidth="2px"
-                    borderColor="border.muted"
+                    bg="transparent"
+                    borderWidth="1px"
+                    borderStyle="solid"
+                    borderColor="fg"
                     color="fg"
-                    rounded="xl"
-                    fontWeight="semibold"
+                    rounded="6px"
+                    fontWeight="normal"
                     fontSize="sm"
-                    _hover={{ borderColor: 'fg.muted', bg: 'bg.hover' }}
-                    transition="colors"
+                    _hover={{ bg: 'bg.hover' }}
+                    transition="all 0.2s"
                     _disabled={{ opacity: 0.5, cursor: 'not-allowed' }}
                     display="flex"
                     alignItems="center"
                     justifyContent="center"
                     gap={2}
                     variant="outline"
+                    fontFamily="heading"
                   >
                     <Box as={Hammer} w={4} h={4} />
                     Manual Mode — Build by Hand
@@ -605,11 +710,12 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
                     fontSize="xs"
                     color="fg.muted"
                     _hover={{ color: 'fg.secondary' }}
-                    transition="colors"
+                    transition="all 0.2s"
                     cursor="pointer"
                     bg="transparent"
                     border="none"
                     p={0}
+                    fontFamily="body"
                   >
                     <Box as={FolderOpen} w={3.5} h={3.5} />
                     Load previous analysis (JSON)
@@ -621,7 +727,7 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
               )}
 
               {/* Footer hint */}
-              <Text textAlign="center" fontSize="xs" color="fg.muted" mt={1}>
+              <Text textAlign="center" fontSize="xs" color="fg.muted" mt={1} fontFamily="body">
                 {enableWebResearch
                   ? 'Includes web research · Full analysis takes 2-4 minutes'
                   : 'Full analysis takes 2-3 minutes'}
@@ -631,39 +737,42 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
         </Box>
       </Box>
 
-      {/* ── Settings Drawer Overlay ── */}
-      {drawerOpen && (
+      {/* ── Analysis Settings Modal ── */}
+      {settingsModalOpen && (
         <Box
           position="fixed"
           inset={0}
           zIndex={50}
-          onClick={() => setDrawerOpen(false)}
+          display="flex"
+          alignItems="center"
+          justifyContent="center"
+          onClick={() => setSettingsModalOpen(false)}
         >
           {/* Backdrop */}
           <Box
             position="absolute"
             inset={0}
-            bg="blackAlpha.400"
-            transition="opacity 0.2s"
+            bg="blackAlpha.500"
+            backdropFilter="blur(8px)"
           />
 
-          {/* Drawer panel */}
+          {/* Modal panel */}
           <Box
-            position="absolute"
-            top={0}
-            right={0}
-            h="100vh"
-            w={{ base: '100%', md: '420px' }}
+            position="relative"
+            w={{ base: '95%', md: '520px' }}
+            maxH="85vh"
             bg="bg.canvas"
-            borderLeft="1px solid"
-            borderColor="border.muted"
+            borderWidth="1px"
+            borderStyle="solid"
+            borderColor="border.emphasized"
+            rounded="8px"
             shadow="xl"
             overflowY="auto"
             onClick={(e: React.MouseEvent) => e.stopPropagation()}
           >
-            {/* Drawer header */}
+            {/* Modal header */}
             <Flex
-              px={5}
+              px={6}
               py={4}
               align="center"
               justify="space-between"
@@ -672,29 +781,31 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
             >
               <Flex align="center" gap={2}>
                 <Box as={Settings} w={4} h={4} color="fg.muted" />
-                <Text fontSize="md" fontWeight="semibold" color="fg">Analysis Settings</Text>
+                <Text fontSize="md" fontWeight="semibold" color="fg" fontFamily="heading">
+                  Analysis Settings
+                </Text>
               </Flex>
               <Box
                 as="button"
-                onClick={() => setDrawerOpen(false)}
+                onClick={() => setSettingsModalOpen(false)}
                 p={1.5}
-                rounded="md"
+                rounded="6px"
                 color="fg.muted"
                 _hover={{ color: 'fg', bg: 'bg.hover' }}
-                transition="all 0.15s"
+                transition="all 0.2s"
               >
                 <X style={{ width: 16, height: 16 }} />
               </Box>
             </Flex>
 
-            {/* Drawer body */}
-            <Flex direction="column" gap={5} p={5}>
+            {/* Modal body */}
+            <Flex direction="column" gap={6} p={6}>
 
               {/* Perspective */}
               <Box>
                 <Flex align="center" gap={2} mb={2}>
                   <Box as={Users} w={4} h={4} color="fg.muted" />
-                  <Text fontSize="sm" fontWeight="semibold" color="fg">Perspective</Text>
+                  <Text fontSize="sm" fontWeight="medium" color="fg" fontFamily="heading">Perspective</Text>
                 </Flex>
                 <Input
                   type="text"
@@ -704,34 +815,42 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
                   w="full"
                   px={4}
                   py={2.5}
-                  rounded="lg"
+                  rounded="6px"
                   borderColor="border.muted"
-                  _focus={{ borderColor: 'border.focus', ring: '2px', ringColor: 'brand/20' }}
+                  bg="bg"
+                  color="fg"
+                  _placeholder={{ color: 'fg.muted' }}
+                  _focus={{ borderColor: 'border.focus', boxShadow: '0 0 0 1px var(--chakra-colors-border-focus)' }}
                   outline="none"
                   fontSize="sm"
+                  fontFamily="body"
                 />
                 <Flex mt={2} flexWrap="wrap" gap={1.5}>
                   {perspectiveQuickPicks.map((p) => (
-                    <Button
+                    <Box
                       key={p}
+                      as="button"
                       type="button"
                       onClick={() => setPerspective(p)}
-                      px={2}
+                      px={2.5}
                       py={1}
                       fontSize="xs"
                       rounded="full"
-                      transition="colors"
-                      bg={perspective === p ? 'brand' : 'bg.active'}
-                      color={perspective === p ? 'brand.contrast' : 'fg.secondary'}
+                      transition="all 0.2s"
+                      bg={perspective === p ? 'fg' : 'bg.hover'}
+                      color={perspective === p ? 'bg' : 'fg.secondary'}
                       _hover={perspective !== p ? { bg: 'bg.active' } : undefined}
-                      variant="solid"
-                      size="xs"
+                      cursor="pointer"
+                      fontFamily="heading"
+                      borderWidth="1px"
+                      borderStyle="solid"
+                      borderColor={perspective === p ? 'fg' : 'transparent'}
                     >
                       {p}
-                    </Button>
+                    </Box>
                   ))}
                 </Flex>
-                <Text mt={2} fontSize="xs" color="fg.muted">
+                <Text mt={2} fontSize="xs" color="fg.muted" fontFamily="body">
                   Consequences are rated positive/negative from this viewpoint.
                 </Text>
               </Box>
@@ -740,38 +859,41 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
               <Box>
                 <Flex align="center" gap={2} mb={2}>
                   <Box as={Clock} w={4} h={4} color="fg.muted" />
-                  <Text fontSize="sm" fontWeight="semibold" color="fg">Time Horizon</Text>
+                  <Text fontSize="sm" fontWeight="medium" color="fg" fontFamily="heading">Time Horizon</Text>
                 </Flex>
                 <Box display="grid" gridTemplateColumns="repeat(3, 1fr)" gap={2}>
                   {(Object.keys(HORIZON_LABELS) as Horizon[]).map((h) => (
-                    <Button
+                    <Box
                       key={h}
+                      as="button"
                       type="button"
                       onClick={() => setHorizon(h)}
                       py={2.5}
                       px={3}
-                      rounded="lg"
-                      borderWidth="2px"
-                      transition="all"
-                      borderColor={horizon === h ? 'brand' : 'border.muted'}
-                      bg={horizon === h ? 'brand/5' : 'transparent'}
-                      color={horizon === h ? 'brand' : 'fg.secondary'}
-                      _hover={horizon !== h ? { borderColor: 'border.muted' } : undefined}
-                      variant="outline"
-                      h="auto"
+                      rounded="6px"
+                      borderWidth="1px"
+                      borderStyle="solid"
+                      transition="all 0.2s"
+                      borderColor={horizon === h ? 'fg' : 'border.muted'}
+                      bg={horizon === h ? 'fg' : 'transparent'}
+                      color={horizon === h ? 'bg' : 'fg.secondary'}
+                      _hover={horizon !== h ? { bg: 'bg.hover', borderColor: 'fg.muted' } : undefined}
+                      cursor="pointer"
+                      display="flex"
                       flexDirection="column"
-                      fontSize="sm"
+                      alignItems="center"
+                      gap={0.5}
                     >
-                      <Text fontWeight="semibold" fontSize="sm">{HORIZON_LABELS[h]}</Text>
-                      <Text fontSize="xs" opacity={0.7}>
+                      <Text fontWeight="medium" fontSize="sm" fontFamily="heading">{HORIZON_LABELS[h]}</Text>
+                      <Text fontSize="2xs" opacity={0.7} fontFamily="body">
                         {h === 'near' && 'Immediate focus'}
                         {h === 'medium' && 'Balanced'}
                         {h === 'far' && 'Long-term vision'}
                       </Text>
-                    </Button>
+                    </Box>
                   ))}
                 </Box>
-                <Text mt={2} fontSize="xs" color="fg.muted">
+                <Text mt={2} fontSize="xs" color="fg.muted" fontFamily="body">
                   Biases the time distribution of generated consequences.
                 </Text>
               </Box>
@@ -780,24 +902,34 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
               <Box>
                 <Flex align="center" gap={2} mb={2}>
                   <Box as={FileText} w={4} h={4} color="fg.muted" />
-                  <Text fontSize="sm" fontWeight="semibold" color="fg">Additional Context</Text>
+                  <Text fontSize="sm" fontWeight="medium" color="fg" fontFamily="heading">Additional Context</Text>
                 </Flex>
 
                 <input ref={fileInputRef} type="file" accept=".pdf,.txt,.md" onChange={handleFileSelect} hidden />
 
                 {uploadedFile ? (
-                  <Flex align="center" gap={2} p={3} bg="bg.hover" rounded="lg" borderWidth="1px" borderColor="border.muted" mb={2}>
+                  <Flex
+                    align="center"
+                    gap={2}
+                    p={3}
+                    bg="bg.hover"
+                    rounded="6px"
+                    borderWidth="1px"
+                    borderStyle="solid"
+                    borderColor="border.muted"
+                    mb={2}
+                  >
                     <Box as={FileText} w={4} h={4} color="fg.muted" />
-                    <Text fontSize="sm" color="fg" flex={1} truncate>{uploadedFile.name}</Text>
+                    <Text fontSize="sm" color="fg" flex={1} truncate fontFamily="body">{uploadedFile.name}</Text>
                     {isProcessingFile ? (
-                      <Box as={Loader2} w={4} h={4} color="brand" animation="spin" />
+                      <Box as={Loader2} w={4} h={4} color="fg.muted" animation="spin" />
                     ) : (
                       <Box
                         as="button"
                         type="button"
                         onClick={clearFile}
                         p={1}
-                        rounded="md"
+                        rounded="4px"
                         _hover={{ bg: 'bg.active' }}
                       >
                         <X style={{ width: 14, height: 14 }} />
@@ -811,13 +943,13 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
                     w="full"
                     py={2.5}
                     px={4}
-                    borderWidth="2px"
+                    borderWidth="1px"
                     borderStyle="dashed"
                     borderColor="border.muted"
-                    rounded="lg"
+                    rounded="6px"
                     color="fg.muted"
-                    _hover={{ borderColor: 'fg.muted', color: 'fg.secondary' }}
-                    transition="colors"
+                    _hover={{ borderColor: 'fg.muted', color: 'fg.secondary', bg: 'bg.hover' }}
+                    transition="all 0.2s"
                     display="flex"
                     alignItems="center"
                     justifyContent="center"
@@ -826,6 +958,7 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
                     bg="transparent"
                     mb={2}
                     fontSize="sm"
+                    fontFamily="heading"
                   >
                     <Box as={Upload} w={4} h={4} />
                     Upload PDF, TXT, or Markdown
@@ -843,15 +976,19 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
                     w="full"
                     px={4}
                     py={3}
-                    rounded="lg"
+                    rounded="6px"
                     borderColor="border.muted"
-                    _focus={{ borderColor: 'border.focus', ring: '2px', ringColor: 'brand/20' }}
+                    bg="bg"
+                    color="fg"
+                    _placeholder={{ color: 'fg.muted' }}
+                    _focus={{ borderColor: 'border.focus', boxShadow: '0 0 0 1px var(--chakra-colors-border-focus)' }}
                     outline="none"
                     resize="none"
                     fontSize="sm"
+                    fontFamily="body"
                   />
                   {sourceText && (
-                    <Box position="absolute" bottom={2} right={2} fontSize="xs" color="fg.muted">
+                    <Box position="absolute" bottom={2} right={2} fontSize="xs" color="fg.muted" fontFamily="mono">
                       {sourceText.length.toLocaleString()} chars
                     </Box>
                   )}
@@ -863,7 +1000,7 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
                 <Flex align="center" justify="space-between" mb={2}>
                   <Flex align="center" gap={2}>
                     <Box as={Search} w={4} h={4} color="fg.muted" />
-                    <Text fontSize="sm" fontWeight="semibold" color="fg">Web Research</Text>
+                    <Text fontSize="sm" fontWeight="medium" color="fg" fontFamily="heading">Web Research</Text>
                   </Flex>
                   <Box
                     as="button"
@@ -873,8 +1010,8 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
                     w={10}
                     h={5}
                     rounded="full"
-                    transition="colors"
-                    bg={enableWebResearch ? 'brand' : 'bg.active'}
+                    transition="all 0.2s"
+                    bg={enableWebResearch ? 'fg' : 'bg.active'}
                     cursor="pointer"
                   >
                     <Box
@@ -882,14 +1019,14 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
                       top="2px"
                       w={4}
                       h={4}
-                      bg="bg.canvas"
+                      bg={enableWebResearch ? 'bg' : 'bg.canvas'}
                       rounded="full"
-                      transition="transform"
+                      transition="all 0.2s"
                       left={enableWebResearch ? '22px' : '2px'}
                     />
                   </Box>
                 </Flex>
-                <Text fontSize="xs" color="fg.muted" mb={2}>
+                <Text fontSize="xs" color="fg.muted" mb={2} fontFamily="body">
                   Searches news and papers to enrich your analysis with real-world context.
                 </Text>
 
@@ -901,17 +1038,22 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
                     w="full"
                     py={2}
                     px={3}
-                    bg="bg.active"
+                    bg="bg.hover"
                     _hover={{ bg: 'bg.active' }}
                     color="fg"
-                    rounded="lg"
+                    rounded="6px"
                     fontSize="sm"
-                    fontWeight="medium"
+                    fontWeight="normal"
                     _disabled={{ opacity: 0.5 }}
                     display="flex"
                     alignItems="center"
                     justifyContent="center"
                     gap={2}
+                    fontFamily="heading"
+                    transition="all 0.2s"
+                    borderWidth="1px"
+                    borderStyle="solid"
+                    borderColor="border.muted"
                   >
                     {isResearching ? (
                       <><Box as={Loader2} w={4} h={4} animation="spin" /> Scanning...</>
@@ -922,8 +1064,16 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
                 )}
 
                 {researchResults && researchResults.results.length > 0 && (
-                  <Box mt={3} p={3} bg="green.50" borderWidth="1px" borderColor="green.200" rounded="lg">
-                    <Flex align="center" gap={2} color="green.800" fontWeight="medium" fontSize="sm" mb={2}>
+                  <Box
+                    mt={3}
+                    p={3}
+                    borderWidth="1px"
+                    borderStyle="solid"
+                    borderColor="border.muted"
+                    rounded="6px"
+                    bg="bg.hover"
+                  >
+                    <Flex align="center" gap={2} color="fg.secondary" fontWeight="medium" fontSize="sm" mb={2} fontFamily="heading">
                       <Box as={BookOpen} w={4} h={4} />
                       Found {researchResults.results.length} sources
                     </Flex>
@@ -931,16 +1081,16 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
                       {researchResults.results.slice(0, 5).map((result, idx) => (
                         <Box key={idx} fontSize="xs">
                           <Flex align="center" gap={1} color="fg.secondary">
-                            {result.source === 'news' && <Box as={Newspaper} w={3} h={3} color="fg.link" />}
-                            {result.source === 'academic' && <Box as={BookOpen} w={3} h={3} color="purple.500" />}
-                            <Text fontWeight="medium" truncate>{result.title}</Text>
+                            {result.source === 'news' && <Box as={Newspaper} w={3} h={3} color="fg.muted" />}
+                            {result.source === 'academic' && <Box as={BookOpen} w={3} h={3} color="fg.muted" />}
+                            <Text fontWeight="medium" truncate fontFamily="body">{result.title}</Text>
                           </Flex>
                         </Box>
                       ))}
                     </Flex>
                     {researchResults.keyInsights.length > 0 && (
-                      <Box mt={2} pt={2} borderTopWidth="1px" borderColor="green.200">
-                        <Text fontSize="xs" color="green.700">{researchResults.keyInsights[0]}</Text>
+                      <Box mt={2} pt={2} borderTopWidth="1px" borderColor="border.muted">
+                        <Text fontSize="xs" color="fg.secondary" fontFamily="body">{researchResults.keyInsights[0]}</Text>
                       </Box>
                     )}
                   </Box>
@@ -950,16 +1100,20 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
               {/* Done button */}
               <Button
                 type="button"
-                onClick={() => setDrawerOpen(false)}
+                onClick={() => setSettingsModalOpen(false)}
                 w="full"
                 py={3}
-                bg="brand"
-                color="brand.contrast"
-                rounded="xl"
+                bg="fg"
+                color="bg"
+                rounded="6px"
                 fontWeight="semibold"
                 fontSize="sm"
-                _hover={{ bg: 'brand.hover' }}
-                mt={2}
+                borderWidth="1px"
+                borderStyle="solid"
+                borderColor="fg"
+                _hover={{ opacity: 0.85 }}
+                transition="all 0.2s"
+                fontFamily="heading"
               >
                 Done
               </Button>

@@ -28,10 +28,9 @@ const NODE_WIDTH = 250;
 const MIN_ARC_SPACING = 30;
 
 // Spacing multiplier for verbose modes — nodes need more room when text is longer
-export type VerbositySpacing = 'concise' | 'normal' | 'detailed';
+export type VerbositySpacing = 'concise' | 'detailed';
 const SPACING_MULTIPLIERS: Record<VerbositySpacing, number> = {
   concise: 0.9,
-  normal: 1.0,
   detailed: 1.4,
 };
 
@@ -51,7 +50,7 @@ export function computeRadialLayout(
   forceRelayout?: boolean,
   verbosity?: VerbositySpacing,
 ): Map<string, Position> {
-  const spacingMul = SPACING_MULTIPLIERS[verbosity || 'normal'];
+  const spacingMul = SPACING_MULTIPLIERS[verbosity || 'concise'];
   const positions = new Map<string, Position>();
   positions.set('seed', { x: 0, y: 0 });
 
@@ -156,19 +155,19 @@ export function computeRadialLayout(
     const needingLayout = orderConsequences.filter(c => !positions.has(c.id));
     if (needingLayout.length === 0) continue;
 
-    // Group by parent
+    // Group by primary parent (first in parentIds array)
     const byParent: Record<string, Consequence[]> = {};
     needingLayout.forEach(c => {
-      const parentId = c.parentId || 'seed';
-      if (!byParent[parentId]) byParent[parentId] = [];
-      byParent[parentId].push(c);
+      const primaryParent = c.parentIds[0] || 'seed';
+      if (!byParent[primaryParent]) byParent[primaryParent] = [];
+      byParent[primaryParent].push(c);
     });
 
     // Also find existing siblings (already positioned) for each parent so we
     // don't place new children on top of them.
     const existingSiblingsByParent: Record<string, Consequence[]> = {};
     orderConsequences.filter(c => positions.has(c.id)).forEach(c => {
-      const pid = c.parentId || 'seed';
+      const pid = c.parentIds[0] || 'seed';
       if (!existingSiblingsByParent[pid]) existingSiblingsByParent[pid] = [];
       existingSiblingsByParent[pid].push(c);
     });
@@ -403,7 +402,7 @@ export function computeFocusPositions(
     while (currentId && currentId !== 'seed') {
       chainOrdered.unshift(currentId);
       const c = consLookup.get(currentId);
-      currentId = c?.parentId || undefined;
+      currentId = (c?.parentIds.length ? c.parentIds[0] : undefined);
     }
     chainOrdered.unshift('seed');
   }
