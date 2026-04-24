@@ -589,15 +589,39 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       return;
     }
 
-    // Check if reversing would create a cycle
-    if (wouldCreateCycle(childId, parentId)) {
-      setEdgePopover(null);
-      return;
-    }
-
     const parentNode = consequenceMap.get(parentId);
     const childNode = consequenceMap.get(childId);
     if (!parentNode || !childNode) { setEdgePopover(null); return; }
+
+    // Cycle check must ignore the existing edge being reversed.
+    // After reversal, childId becomes parent of parentId.
+    // Walk ancestors of childId (the new parent) — but skip the
+    // current parentId→childId link — looking for parentId (the new child).
+    const wouldCycleAfterReverse = (() => {
+      const visited = new Set<string>();
+      const queue = [childId];
+      while (queue.length > 0) {
+        const current = queue.shift()!;
+        if (visited.has(current)) continue;
+        visited.add(current);
+        if (current === parentId) return true;
+        if (current === 'seed') continue;
+        const node = consequenceMap.get(current);
+        if (node) {
+          for (const pid of node.parentIds) {
+            // Skip the edge we're about to remove (childId's link to parentId)
+            if (current === childId && pid === parentId) continue;
+            if (!visited.has(pid)) queue.push(pid);
+          }
+        }
+      }
+      return false;
+    })();
+
+    if (wouldCycleAfterReverse) {
+      setEdgePopover(null);
+      return;
+    }
 
     setConsequences(prev => prev.map(c => {
       if (c.id === childId) {
@@ -621,7 +645,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       return c;
     }));
     setEdgePopover(null);
-  }, [edgePopover, consequenceMap, wouldCreateCycle]);
+  }, [edgePopover, consequenceMap]);
 
   // ── handleSeedClick & handleNodeClick (after connect handlers to avoid hoisting issues) ──
   const handleSeedClick = useCallback(() => {
