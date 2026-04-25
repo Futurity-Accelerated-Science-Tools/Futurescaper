@@ -12,6 +12,9 @@ import ReactFlow, {
   MarkerType,
   ReactFlowInstance,
   BackgroundVariant,
+  BaseEdge,
+  EdgeProps,
+  Position as RFPosition,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 
@@ -47,6 +50,51 @@ import { useColorMode } from '../theme/ColorModeProvider';
 const nodeTypes = {
   seed: SeedNode,
   consequence: ConsequenceNode,
+};
+
+// ─── Custom edge: dramatic arc with straight approach to arrowhead ───
+// Uses a cubic bezier that bows out more than default, but the final
+// segment straightens to enter the target handle head-on.
+function getHandleOffset(position: RFPosition | undefined, distance: number): { dx: number; dy: number } {
+  switch (position) {
+    case RFPosition.Left:   return { dx: -distance, dy: 0 };
+    case RFPosition.Right:  return { dx: distance, dy: 0 };
+    case RFPosition.Top:    return { dx: 0, dy: -distance };
+    case RFPosition.Bottom: return { dx: 0, dy: distance };
+    default:                return { dx: distance, dy: 0 };
+  }
+}
+
+function StraightApproachEdge({
+  id, sourceX, sourceY, targetX, targetY,
+  sourcePosition, targetPosition,
+  style, markerEnd,
+}: EdgeProps) {
+  // Distance from handle to control point — controls how far the arc bows out
+  const dx = Math.abs(targetX - sourceX);
+  const dy = Math.abs(targetY - sourceY);
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  const arcStrength = Math.max(50, dist * 0.45); // bows out proportionally, min 50px
+
+  // Source control point: push away from source handle direction
+  const srcOff = getHandleOffset(sourcePosition, arcStrength);
+  const cx1 = sourceX + srcOff.dx;
+  const cy1 = sourceY + srcOff.dy;
+
+  // Target control point: push away from target handle direction (straightens approach)
+  // Use a shorter distance so the line straightens earlier
+  const approachDist = Math.max(30, dist * 0.3);
+  const tgtOff = getHandleOffset(targetPosition, approachDist);
+  const cx2 = targetX + tgtOff.dx;
+  const cy2 = targetY + tgtOff.dy;
+
+  const path = `M ${sourceX} ${sourceY} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${targetX} ${targetY}`;
+
+  return <BaseEdge id={id} path={path} style={style} markerEnd={markerEnd} />;
+}
+
+const edgeTypes = {
+  straightApproach: StraightApproachEdge,
 };
 
 // Type for imported data
@@ -85,7 +133,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
   const [showNewHighlight, setShowNewHighlight] = useState(false);
   const [lastExpansionTime, setLastExpansionTime] = useState<number | null>(null);
   const [showHighImpact, setShowHighImpact] = useState(false);
-  const [filterPanelCollapsed, setFilterPanelCollapsed] = useState(false);
+  const [filterPanelCollapsed, setFilterPanelCollapsed] = useState(true);
   const [relatedSubjects, setRelatedSubjects] = useState<RelevantSubject[]>([]);
   const [isLoadingSubjects, setIsLoadingSubjects] = useState(false);
   const subjectsRequested = useRef(false);
@@ -1063,19 +1111,17 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
         target: c.id,
         sourceHandle,
         targetHandle,
-        type: 'default',
+        type: 'straightApproach',
         zIndex: isElevated ? 999 : undefined,
         style: {
           stroke: edgeColor,
-          strokeWidth: isDimmed ? 1.5 : (isElevated ? 5 : 3),
+          strokeWidth: isDimmed ? 1 : (isElevated ? 3 : 1.5),
           // All edges solid — no dashing for wildcards or ideas
-          opacity: isDimmed ? 0.15 : (isElevated ? 1 : (c.order === 1 ? 0.7 : 0.6)),
+          opacity: isDimmed ? 0.1 : (isElevated ? 0.85 : (c.order === 1 ? 0.5 : 0.4)),
         },
         markerEnd: {
           type: MarkerType.ArrowClosed,
           color: edgeColor,
-          width: isElevated ? 24 : (c.order === 1 ? 20 : 16),
-          height: isElevated ? 24 : (c.order === 1 ? 20 : 16),
         },
         animated: c.id.startsWith('placeholder-') || (generationPhase !== 'complete' && generationPhase !== 'idle' && generationPhase === phaseMap[c.order]),
       });
@@ -1455,7 +1501,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     prevEditingRef.current = editingNodeId;
     if (editChanged && editingNodeId) {
       // Small delay so the enlarged edit form has rendered and RF has measured it
-      setTimeout(() => centerOnNode(editingNodeId, 0.7), 80);
+      setTimeout(() => centerOnNode(editingNodeId, 1.0), 80);
     }
   }, [editingNodeId, centerOnNode]);
 
@@ -2176,6 +2222,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
           connectionMode={ConnectionMode.Loose}
           nodesConnectable={false}
           onEdgeClick={handleEdgeClick}
@@ -2188,8 +2235,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
           minZoom={0.1}
           maxZoom={2}
           defaultEdgeOptions={{
-            type: 'default',
-            style: { strokeLinecap: 'round', strokeLinejoin: 'round' },
+            type: 'straightApproach',
           }}
         >
           <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="var(--chakra-colors-border-muted, #F0F0F0)" />
@@ -2809,71 +2855,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
           </Flex>
         )}
 
-        {/* Floating prompt bar */}
-        {generationPhase === 'complete' && (
-          <Box position="absolute" bottom={6} left="50%" transform="translateX(-50%)" w="100%" maxW="2xl" px={4} zIndex={10}>
-            <Box bg="bg.muted" backdropFilter="blur(8px)" rounded="2xl" shadow="lg" border="1px solid" borderColor="border.muted" p={3}>
-              {promptProgress && (
-                <Flex fontSize="xs" color="fg.muted" mb={2} px={2} align="center" gap={2}>
-                  {isPrompting && <Loader2 style={{ width: 12, height: 12 }} className="animate-spin" />}
-                  {promptProgress}
-                </Flex>
-              )}
-              <Flex
-                as="form"
-                onSubmit={(e: React.FormEvent) => { e.preventDefault(); handlePromptSubmit(); }}
-                align="center"
-                gap={2}
-              >
-                {lastExpansionTime && (
-                  <Box
-                    as="button"
-                    type="button"
-                    onClick={() => setShowNewHighlight(!showNewHighlight)}
-                    p="6px"
-                    rounded="lg"
-                    transition="colors"
-                    flexShrink={0}
-                    bg={showNewHighlight ? 'warning/12' : 'transparent'}
-                    color={showNewHighlight ? 'warning' : 'fg.muted'}
-                    _hover={{ color: 'fg.secondary', bg: 'bg.hover' }}
-                    title={showNewHighlight ? 'Hide new highlights' : 'Show new highlights'}
-                  >
-                    <Sparkles style={{ width: 16, height: 16 }} />
-                  </Box>
-                )}
-                {!lastExpansionTime && <Box as={Sparkles} w="16px" h="16px" color="brand" flexShrink={0} ml={1} />}
-                <input
-                  type="text"
-                  value={promptText}
-                  onChange={(e) => setPromptText(e.target.value)}
-                  placeholder="Push deeper, add wildcards, explore economic impacts..."
-                  style={{ flex: 1, background: 'transparent', fontSize: '14px', outline: 'none' }}
-                  disabled={isPrompting}
-                />
-                <Box
-                  as="button"
-                  type="submit"
-                  disabled={!promptText.trim() || isPrompting}
-                  p={2}
-                  rounded="xl"
-                  bg="brand"
-                  color="brand.contrast"
-                  _hover={{ opacity: 0.9 }}
-                  _disabled={{ opacity: 0.4, cursor: 'not-allowed' }}
-                  transition="colors"
-                  flexShrink={0}
-                >
-                  {isPrompting ? (
-                    <Loader2 style={{ width: 16, height: 16 }} className="animate-spin" />
-                  ) : (
-                    <Send style={{ width: 16, height: 16 }} />
-                  )}
-                </Box>
-              </Flex>
-            </Box>
-          </Box>
-        )}
+        {/* Floating prompt bar removed — low usage, obscured nodes */}
       </Box>
 
       </Flex>

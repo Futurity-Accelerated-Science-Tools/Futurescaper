@@ -22,6 +22,17 @@ const STEEP_COLORS_MUTED_DARK: Record<STEEPCategory, string> = {
   ethical: 'rgba(124,92,252,0.18)',
 };
 
+// Solid dark-mode colors for floating elements (pills that overlap borders/edges)
+// Pre-composited against dark card bg (#1a1a1a) so no bleed-through
+const STEEP_COLORS_MUTED_DARK_SOLID: Record<STEEPCategory, string> = {
+  social: '#3d1a2e',
+  technological: '#1a3530',
+  economic: '#32351a',
+  environmental: '#1a2e1f',
+  political: '#3a261a',
+  ethical: '#2a1e42',
+};
+
 // Matching text colors for muted backgrounds (vivid but not as bright as the pure colors)
 const STEEP_TEXT_COLORS: Record<STEEPCategory, string> = {
   social: '#c41874',
@@ -67,4 +78,13 @@ export function getSteepTextColor(category: STEEPCategory, isDark: boolean): str
   return isDark ? STEEP_TEXT_COLORS_DARK[category] : STEEP_TEXT_COLORS[category];
 }
 
-export { STEEP_ICON_MAP, STEEP_COLORS_MUTED_DARK, STEEP_TEXT_COLORS, STEEP_TEXT_COLORS_DARK };
+/**
+ * Returns a solid (opaque) muted background for floating elements like pills
+ * that overlap borders/edges. In light mode this is the same as getSteepMutedBg.
+ * In dark mode it uses pre-composited solid colors to avoid bleed-through.
+ */
+export function getSteepMutedBgSolid(category: STEEPCategory, isDark: boolean): string {
+  return isDark ? STEEP_COLORS_MUTED_DARK_SOLID[category] : STEEP_COLORS_MUTED[category];
+}
+
+export { STEEP_ICON_MAP, STEEP_COLORS_MUTED_DARK, STEEP_COLORS_MUTED_DARK_SOLID, STEEP_TEXT_COLORS, STEEP_TEXT_COLORS_DARK };

@@ -1,5 +1,5 @@
 import React, { memo, useState, useEffect, useRef } from 'react';
-import { Handle, Position, NodeProps } from 'reactflow';
+import { Handle, Position, NodeProps, useStore } from 'reactflow';
 import { Box, Flex, Text } from '@chakra-ui/react';
 import {
   Consequence,
@@ -18,7 +18,7 @@ import {
   Lightbulb, Wrench, Pencil, Plus, Sparkles, Trash2, Loader2,
   Check, X, Cable, Unlink,
 } from 'lucide-react';
-import { SteepIcon, getSteepMutedBg, getSteepTextColor } from './SteepIcon';
+import { SteepIcon, getSteepMutedBg, getSteepMutedBgSolid, getSteepTextColor } from './SteepIcon';
 import { useColorMode } from '../theme/ColorModeProvider';
 
 // ─── Shared NodeHandles ───────────────────────────────────────────
@@ -265,6 +265,9 @@ function EditModeView({
   onSave: (updates: Partial<Consequence>) => void;
   onCancel: () => void;
 }) {
+  const zoom = useStore(zoomSelector);
+  const { colorMode } = useColorMode();
+  const editIsDark = colorMode === 'dark';
   const [text, setText] = useState(consequence.text);
   const [title, setTitle] = useState(consequence.title || '');
   const [sentiment, setSentiment] = useState<Sentiment>(consequence.sentiment);
@@ -327,14 +330,20 @@ function EditModeView({
   // Sentiment border color for the panel
   const sentimentBorderColor = isSolutionOrIdea ? panelBorder : (sentimentOptions.find(s => s.value === sentiment)?.color || '#94a3b8');
 
-  // Importance indicator colors
-  const impBarBg: Record<string, string> = isSolutionOrIdea
-    ? { critical: '#fbbf24', high: 'rgba(255,255,255,0.3)', medium: 'rgba(255,255,255,0.15)', low: 'transparent' }
-    : { critical: '#fbbf24', high: 'var(--chakra-colors-fg-muted, #94a3b8)', medium: 'var(--chakra-colors-border-muted, #e0e0e0)', low: 'transparent' };
-  const impBarTextColor: Record<string, string> = isSolutionOrIdea
-    ? { critical: '#1B1B1D', high: '#fff', medium: 'rgba(255,255,255,0.8)', low: 'transparent' }
-    : { critical: '#1B1B1D', high: 'var(--chakra-colors-bg-canvas, #fff)', medium: 'var(--chakra-colors-fg-muted, #666)', low: 'transparent' };
-  const importanceLabels: Record<string, string> = { critical: 'Critical', high: 'High', medium: 'Medium', low: '' };
+  // Sentiment-tinted shadow (matches border color at low opacity)
+  const sentimentShadowMap: Record<string, string> = {
+    positive: '0 4px 20px rgba(34,197,94,0.25)',
+    negative: '0 4px 20px rgba(239,68,68,0.25)',
+    neutral: '0 4px 20px rgba(148,163,184,0.2)',
+  };
+  const panelShadow = isSolutionOrIdea ? '0 4px 20px rgba(0,5,233,0.3)' : (sentimentShadowMap[sentiment] || sentimentShadowMap.neutral);
+
+  // Sentiment badge styles for selector (match the inline badge in the node body)
+  const sentimentBadgeStyles: Record<string, { bg: string; color: string }> = {
+    positive: { bg: editIsDark ? 'rgba(34,197,94,0.15)' : '#e6fff5', color: editIsDark ? '#4ade80' : '#0a6847' },
+    negative: { bg: editIsDark ? 'rgba(239,68,68,0.15)' : '#fff0f3', color: editIsDark ? '#f87171' : '#a4133c' },
+    neutral:  { bg: editIsDark ? 'rgba(148,163,184,0.15)' : '#e8eaef', color: editIsDark ? '#94a3b8' : '#2d3341' },
+  };
 
   // Shared mini-button style helper
   const miniBtn = (active: boolean) => ({
@@ -350,8 +359,8 @@ function EditModeView({
         position: 'relative',
         padding: '14px 16px',
         borderRadius: '12px',
-        boxShadow: '0 4px 24px rgba(0,0,0,0.3)',
-        border: `6px solid ${sentimentBorderColor}`,
+        boxShadow: panelShadow,
+        border: `${1 / Math.max(zoom, 0.1)}px solid ${sentimentBorderColor}`,
         backgroundColor: panelBg,
         color: panelText,
         fontFamily: 'var(--chakra-fonts-body)',
@@ -360,52 +369,31 @@ function EditModeView({
     >
       <NodeHandles />
 
-      {/* Sentiment pill + STEEP pill — top-left, live-updates when toggling */}
+      {/* STEEP category pill — floating top-left, muted style, live-updates when toggling */}
       {!isSolutionOrIdea && (
-        <>
-          <div
-            style={{
-              position: 'absolute',
-              top: -12,
-              left: -10,
-              minWidth: 32,
-              height: 32,
-              borderRadius: 16,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: 17,
-              fontWeight: 'bold',
-              color: '#fff',
-              backgroundColor: sentimentOptions.find(s => s.value === sentiment)?.color || '#94a3b8',
-              zIndex: 10,
-              padding: '0 6px',
-              boxShadow: '0 2px 6px rgba(0,0,0,0.15)',
-            }}
-          >
-            {SENTIMENT_SYMBOLS[sentiment]}
-          </div>
-          <div
-            style={{
-              position: 'absolute',
-              top: -12,
-              left: 26,
-              minWidth: 32,
-              height: 32,
-              borderRadius: 16,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#fff',
-              backgroundColor: STEEP_COLORS[category] || '#94a3b8',
-              zIndex: 10,
-              padding: '0 6px',
-              boxShadow: '0 2px 6px rgba(0,0,0,0.15)',
-            }}
-          >
-            <SteepIcon category={category} size={16} />
-          </div>
-        </>
+        <div
+          style={{
+            position: 'absolute',
+            top: -10,
+            left: -6,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            height: 22,
+            borderRadius: 11,
+            backgroundColor: getSteepMutedBgSolid(category, editIsDark),
+            color: getSteepTextColor(category, editIsDark),
+            fontSize: 8,
+            fontWeight: 600,
+            padding: '0 8px',
+            zIndex: 10,
+            border: `2px solid var(--chakra-colors-bg-canvas, #fff)`,
+            boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+          }}
+        >
+          <SteepIcon category={category} size={11} />
+          {STEEP_LABELS[category]}
+        </div>
       )}
 
       {/* Node type toggle: Consequence / Idea */}
@@ -433,31 +421,39 @@ function EditModeView({
         ))}
       </Flex>
 
-      {/* Sentiment selector — only for consequences */}
+      {/* Sentiment selector — only for consequences, badge-style when selected */}
       {!isSolutionOrIdea && (
         <>
           <Text fontSize="2xs" fontWeight="semibold" mb={1} style={{ color: panelTextMuted }}>Sentiment</Text>
           <Flex gap={1} mb={2}>
-            {sentimentOptions.map((opt) => (
-              <Box
-                as="button"
-                key={opt.value}
-                display="flex"
-                alignItems="center"
-                gap={1}
-                px={2}
-                py={1}
-                fontSize="xs"
-                rounded="md"
-                transition="all 0.15s"
-                cursor="pointer"
-                style={miniBtn(sentiment === opt.value)}
-                onClick={(e: React.MouseEvent) => { e.stopPropagation(); setSentiment(opt.value); }}
-                onPointerDown={(e: React.PointerEvent) => e.stopPropagation()}
-              >
-                {opt.symbol} {opt.label}
-              </Box>
-            ))}
+            {sentimentOptions.map((opt) => {
+              const isActive = sentiment === opt.value;
+              const badge = sentimentBadgeStyles[opt.value];
+              return (
+                <Box
+                  as="button"
+                  key={opt.value}
+                  display="flex"
+                  alignItems="center"
+                  gap={1}
+                  px={2}
+                  py={1}
+                  fontSize="xs"
+                  fontWeight={isActive ? 600 : 'normal'}
+                  rounded="md"
+                  transition="all 0.15s"
+                  cursor="pointer"
+                  style={isActive
+                    ? { backgroundColor: badge.bg, color: badge.color }
+                    : { backgroundColor: panelBtnBg, color: panelTextMuted }
+                  }
+                  onClick={(e: React.MouseEvent) => { e.stopPropagation(); setSentiment(opt.value); }}
+                  onPointerDown={(e: React.PointerEvent) => e.stopPropagation()}
+                >
+                  {opt.symbol} {opt.label}
+                </Box>
+              );
+            })}
           </Flex>
         </>
       )}
@@ -518,9 +514,98 @@ function EditModeView({
         _placeholder={{ color: panelTextMuted }}
       />
 
-      {/* Importance — full-width button style, matches the node display */}
+      {/* STEEP, Probability, Time Scale — three columns */}
+      <Flex gap={3} mt={2}>
+        <Box flex={1}>
+          <Text fontSize="2xs" fontWeight="semibold" mb={1} style={{ color: panelTextMuted }}>STEEP</Text>
+          <Flex direction="column" gap={1}>
+            {steepOptions.map((cat) => {
+              const isActive = category === cat;
+              return (
+                <Box
+                  as="button"
+                  key={cat}
+                  display="flex"
+                  alignItems="center"
+                  gap="4px"
+                  w="full"
+                  px={1.5}
+                  py={0.5}
+                  fontSize="2xs"
+                  fontWeight={isActive ? 600 : 'normal'}
+                  rounded="md"
+                  transition="all 0.15s"
+                  cursor="pointer"
+                  style={isActive
+                    ? { backgroundColor: getSteepMutedBgSolid(cat, editIsDark), color: getSteepTextColor(cat, editIsDark) }
+                    : { backgroundColor: panelBtnBg, color: panelTextMuted }
+                  }
+                  onClick={(e: React.MouseEvent) => { e.stopPropagation(); setCategory(cat); }}
+                  onPointerDown={(e: React.PointerEvent) => e.stopPropagation()}
+                >
+                  <SteepIcon category={cat} size={10} /> {STEEP_LABELS[cat]}
+                </Box>
+              );
+            })}
+          </Flex>
+        </Box>
+        <Box flex={1}>
+          <Text fontSize="2xs" fontWeight="semibold" mb={1} style={{ color: panelTextMuted }}>Probability</Text>
+          <Flex direction="column" gap={1}>
+            {probabilityOptions.map((p) => (
+              <Box
+                as="button"
+                key={p}
+                display="flex"
+                alignItems="center"
+                gap="4px"
+                w="full"
+                px={1.5}
+                py={0.5}
+                fontSize="2xs"
+                rounded="md"
+                transition="all 0.15s"
+                cursor="pointer"
+                textTransform="capitalize"
+                style={miniBtn(probability === p)}
+                onClick={(e: React.MouseEvent) => { e.stopPropagation(); setProbability(p); }}
+                onPointerDown={(e: React.PointerEvent) => e.stopPropagation()}
+              >
+                {PROBABILITY_SYMBOLS[p]} {p}
+              </Box>
+            ))}
+          </Flex>
+        </Box>
+        <Box flex={1}>
+          <Text fontSize="2xs" fontWeight="semibold" mb={1} style={{ color: panelTextMuted }}>Time Scale</Text>
+          <Flex direction="column" gap={1}>
+            {timeFrameOptions.map((tf) => (
+              <Box
+                as="button"
+                key={tf.value}
+                display="flex"
+                alignItems="center"
+                w="full"
+                px={1.5}
+                py={0.5}
+                fontSize="2xs"
+                rounded="md"
+                transition="all 0.15s"
+                cursor="pointer"
+                style={miniBtn(timeFrame === tf.value)}
+                onClick={(e: React.MouseEvent) => { e.stopPropagation(); setTimeFrame(tf.value); }}
+                onPointerDown={(e: React.PointerEvent) => e.stopPropagation()}
+              >
+                {tf.label}
+              </Box>
+            ))}
+          </Flex>
+        </Box>
+      </Flex>
+
+      {/* Importance — above save/cancel */}
       <Text fontSize="2xs" fontWeight="semibold" mt={2} mb={1} style={{ color: panelTextMuted }}>Importance</Text>
-      <Flex gap={1} mb={2}>
+      <Flex gap={1} mb={1}>
         {importanceOptions.map((imp) => (
           <Box
             as="button"
@@ -543,77 +628,6 @@ function EditModeView({
             {imp}
           </Box>
         ))}
-      </Flex>
-
-      {/* STEEP, Probability, Time Scale — three columns */}
-      <Flex gap={3} mt={1}>
-        <Box flex={1}>
-          <Text fontSize="2xs" fontWeight="semibold" mb={1} style={{ color: panelTextMuted }}>STEEP</Text>
-          <Flex gap={1} flexWrap="wrap">
-            {steepOptions.map((cat) => (
-              <Box
-                as="button"
-                key={cat}
-                px={1.5}
-                py={0.5}
-                fontSize="2xs"
-                rounded="md"
-                transition="all 0.15s"
-                cursor="pointer"
-                style={miniBtn(category === cat)}
-                onClick={(e: React.MouseEvent) => { e.stopPropagation(); setCategory(cat); }}
-                onPointerDown={(e: React.PointerEvent) => e.stopPropagation()}
-              >
-                <SteepIcon category={cat} size={10} /> {STEEP_LABELS[cat].slice(0, 4)}
-              </Box>
-            ))}
-          </Flex>
-        </Box>
-        <Box flex={1}>
-          <Text fontSize="2xs" fontWeight="semibold" mb={1} style={{ color: panelTextMuted }}>Probability</Text>
-          <Flex gap={1} flexWrap="wrap">
-            {probabilityOptions.map((p) => (
-              <Box
-                as="button"
-                key={p}
-                px={1.5}
-                py={0.5}
-                fontSize="2xs"
-                rounded="md"
-                transition="all 0.15s"
-                cursor="pointer"
-                textTransform="capitalize"
-                style={miniBtn(probability === p)}
-                onClick={(e: React.MouseEvent) => { e.stopPropagation(); setProbability(p); }}
-                onPointerDown={(e: React.PointerEvent) => e.stopPropagation()}
-              >
-                {PROBABILITY_SYMBOLS[p]} {p.slice(0, 5)}
-              </Box>
-            ))}
-          </Flex>
-        </Box>
-        <Box flex={1}>
-          <Text fontSize="2xs" fontWeight="semibold" mb={1} style={{ color: panelTextMuted }}>Time Scale</Text>
-          <Flex gap={1} flexWrap="wrap">
-            {timeFrameOptions.map((tf) => (
-              <Box
-                as="button"
-                key={tf.value}
-                px={1.5}
-                py={0.5}
-                fontSize="2xs"
-                rounded="md"
-                transition="all 0.15s"
-                cursor="pointer"
-                style={miniBtn(timeFrame === tf.value)}
-                onClick={(e: React.MouseEvent) => { e.stopPropagation(); setTimeFrame(tf.value); }}
-                onPointerDown={(e: React.PointerEvent) => e.stopPropagation()}
-              >
-                {tf.label}
-              </Box>
-            ))}
-          </Flex>
-        </Box>
       </Flex>
 
       {/* Save / Cancel */}
@@ -734,9 +748,13 @@ function consequenceNodeAreEqual(
   );
 }
 
+// Stable selector — avoids re-creating on every render
+const zoomSelector = (s: { transform: [number, number, number] }) => s.transform[2];
+
 export const ConsequenceNode = memo(({ data, draggable }: NodeProps<ConsequenceNodeData>) => {
   const { colorMode } = useColorMode();
   const isDark = colorMode === 'dark';
+  const zoom = useStore(zoomSelector);
   const {
     consequence,
     isGenerating,
@@ -847,26 +865,31 @@ export const ConsequenceNode = memo(({ data, draggable }: NodeProps<ConsequenceN
   const nodeBg = isSolutionOrIdea ? IDEA_BRAND : 'var(--chakra-colors-bg-canvas, #FFFFFF)';
 
   const isCritical = importance === 'critical';
-  const isHighImportance = importance === 'high';
-  const isMediumImportance = importance === 'medium';
-  const borderWidth = 6; // Uniform thick border for all nodes
+  // 1px border that stays visually constant regardless of zoom level
+  const borderWidth = 1 / Math.max(zoom, 0.1); // clamp to avoid division issues at extreme zoom-out
 
   // Sentiment pill colors
   const sentimentColors: Record<string, string> = { positive: '#22c55e', negative: '#ef4444', neutral: '#94a3b8' };
 
-  // Importance indicator config
-  const importanceBarBg: Record<string, string> = isSolutionOrIdea
-    ? { critical: '#fbbf24', high: 'rgba(255,255,255,0.3)', medium: 'rgba(255,255,255,0.15)', low: 'transparent' }
-    : { critical: '#fbbf24', high: 'var(--chakra-colors-fg-muted, #94a3b8)', medium: 'var(--chakra-colors-border-muted, #e0e0e0)', low: 'transparent' };
-  const importanceTextColor: Record<string, string> = isSolutionOrIdea
-    ? { critical: '#1B1B1D', high: '#fff', medium: 'rgba(255,255,255,0.8)', low: 'transparent' }
-    : { critical: '#1B1B1D', high: 'var(--chakra-colors-bg-canvas, #fff)', medium: 'var(--chakra-colors-fg-muted, #666)', low: 'transparent' };
-  const importanceLabels: Record<string, string> = {
-    critical: 'Critical',
-    high: 'High',
-    medium: 'Medium',
-    low: '',
-  };
+  // Graduated importance indicator config — line + text for all levels
+  // Weight, opacity, and color all scale with importance
+  const importanceConfig: Record<string, {
+    label: string; textColor: string; textOpacity: number;
+    fontWeight: number; fontSize: number; letterSpacing: string; textTransform: string;
+    lineColor: string; lineWidth: number; lineOpacity: number;
+  }> = isSolutionOrIdea
+    ? {
+        critical: { label: 'CRITICAL', textColor: '#fff', textOpacity: 1, fontWeight: 800, fontSize: 10, letterSpacing: '0.04em', textTransform: 'uppercase', lineColor: 'rgba(255,255,255,0.5)', lineWidth: 2, lineOpacity: 0.4 },
+        high:     { label: 'High', textColor: 'rgba(255,255,255,0.85)', textOpacity: 0.85, fontWeight: 600, fontSize: 10, letterSpacing: '0', textTransform: 'none', lineColor: 'rgba(255,255,255,0.3)', lineWidth: 1.5, lineOpacity: 0.3 },
+        medium:   { label: 'Medium', textColor: 'rgba(255,255,255,0.6)', textOpacity: 0.6, fontWeight: 400, fontSize: 9, letterSpacing: '0', textTransform: 'none', lineColor: 'rgba(255,255,255,0.2)', lineWidth: 1, lineOpacity: 0.2 },
+        low:      { label: 'Low', textColor: 'rgba(255,255,255,0.4)', textOpacity: 0.4, fontWeight: 300, fontSize: 9, letterSpacing: '0', textTransform: 'none', lineColor: 'rgba(255,255,255,0.12)', lineWidth: 0.5, lineOpacity: 0.15 },
+      }
+    : {
+        critical: { label: 'CRITICAL', textColor: '#92400e', textOpacity: 1, fontWeight: 800, fontSize: 10, letterSpacing: '0.04em', textTransform: 'uppercase', lineColor: '#92400e', lineWidth: 2, lineOpacity: 0.4 },
+        high:     { label: 'High', textColor: 'var(--chakra-colors-fg, #1B1B1D)', textOpacity: 0.7, fontWeight: 600, fontSize: 10, letterSpacing: '0', textTransform: 'none', lineColor: 'var(--chakra-colors-fg, #1B1B1D)', lineWidth: 1.5, lineOpacity: 0.25 },
+        medium:   { label: 'Medium', textColor: 'var(--chakra-colors-fg-muted, #7D858C)', textOpacity: 0.6, fontWeight: 400, fontSize: 9, letterSpacing: '0', textTransform: 'none', lineColor: 'var(--chakra-colors-fg-muted, #7D858C)', lineWidth: 1, lineOpacity: 0.2 },
+        low:      { label: 'Low', textColor: 'var(--chakra-colors-fg-muted, #7D858C)', textOpacity: 0.4, fontWeight: 300, fontSize: 9, letterSpacing: '0', textTransform: 'none', lineColor: 'var(--chakra-colors-fg-muted, #7D858C)', lineWidth: 0.5, lineOpacity: 0.15 },
+      };
 
   // Timeframe year-range labels
   const timeFrameYearLabels: Record<string, string> = {
@@ -927,50 +950,31 @@ export const ConsequenceNode = memo(({ data, draggable }: NodeProps<ConsequenceN
         />
       )}
 
-      {/* Sentiment pill + STEEP category pill — top-left corner */}
+      {/* STEEP category pill — floating top-left, muted style */}
       {!isSolutionOrIdea && (
         <>
           <div
             style={{
               position: 'absolute',
-              top: -12,
-              left: -10,
-              minWidth: 32,
-              height: 32,
-              borderRadius: 16,
-              display: 'flex',
+              top: -10,
+              left: -6,
+              display: 'inline-flex',
               alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: 17,
-              fontWeight: 'bold',
-              color: '#fff',
-              backgroundColor: sentimentColors[consequence.sentiment] || sentimentColors.neutral,
+              gap: 4,
+              height: 22,
+              borderRadius: 11,
+              backgroundColor: getSteepMutedBgSolid(consequence.category, isDark),
+              color: getSteepTextColor(consequence.category, isDark),
+              fontSize: 8,
+              fontWeight: 600,
+              padding: '0 8px',
               zIndex: 10,
-              padding: '0 6px',
-              boxShadow: '0 2px 6px rgba(0,0,0,0.15)',
+              border: `2px solid var(--chakra-colors-bg-canvas, #fff)`,
+              boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
             }}
           >
-            {SENTIMENT_SYMBOLS[consequence.sentiment]}
-          </div>
-          <div
-            style={{
-              position: 'absolute',
-              top: -12,
-              left: 26,
-              minWidth: 32,
-              height: 32,
-              borderRadius: 16,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#fff',
-              backgroundColor: STEEP_COLORS[consequence.category] || '#94a3b8',
-              zIndex: 10,
-              padding: '0 6px',
-              boxShadow: '0 2px 6px rgba(0,0,0,0.15)',
-            }}
-          >
-            <SteepIcon category={consequence.category} size={16} />
+            <SteepIcon category={consequence.category} size={11} />
+            {STEEP_LABELS[consequence.category]}
           </div>
         </>
       )}
@@ -1050,51 +1054,33 @@ export const ConsequenceNode = memo(({ data, draggable }: NodeProps<ConsequenceN
         )}
       </Box>
 
-      {/* Importance indicator — full content width, button-style, between text and badges */}
-      {importance !== 'low' && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: '100%',
-            marginTop: 8,
-            padding: '4px 0',
-            borderRadius: 6,
-            fontFamily: "'TT Norms Pro Normal', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
-            fontSize: 10,
-            fontWeight: 700,
-            letterSpacing: '0.03em',
-            backgroundColor: importanceBarBg[importance],
-            color: importanceTextColor[importance],
-            border: isSolutionOrIdea
-              ? '1px solid rgba(255,255,255,0.25)'
-              : `1px solid ${importance === 'critical' ? 'rgba(251,191,36,0.4)' : 'var(--chakra-colors-border-muted, #e0e0e0)'}`,
-          }}
-        >
-          {importanceLabels[importance]}
-        </div>
-      )}
-
-      {/* Bottom badge row: STEEP + probability + timeframe */}
+      {/* Badge row: sentiment + probability + timeframe */}
       <Flex gap={1} mt={2} flexWrap="nowrap" style={{ whiteSpace: 'nowrap' }}>
-        {!isSolutionOrIdea && (
-          <span
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 3,
-              fontWeight: 600,
-              backgroundColor: getSteepMutedBg(consequence.category, isDark),
-              color: getSteepTextColor(consequence.category, isDark),
-              fontSize: 9,
-              padding: '2px 6px',
-              borderRadius: 4,
-            }}
-          >
-            <SteepIcon category={consequence.category} size={10} /> {STEEP_LABELS[consequence.category]}
-          </span>
-        )}
+        {!isSolutionOrIdea && (() => {
+          const sentimentBadge: Record<string, { bg: string; color: string; label: string; symbol: string }> = {
+            positive: { bg: isDark ? 'rgba(34,197,94,0.15)' : '#e6fff5', color: isDark ? '#4ade80' : '#0a6847', label: 'Positive', symbol: '↑' },
+            negative: { bg: isDark ? 'rgba(239,68,68,0.15)' : '#fff0f3', color: isDark ? '#f87171' : '#a4133c', label: 'Negative', symbol: '↓' },
+            neutral:  { bg: isDark ? 'rgba(148,163,184,0.15)' : '#e8eaef', color: isDark ? '#94a3b8' : '#2d3341', label: 'Neutral', symbol: '—' },
+          };
+          const badge = sentimentBadge[consequence.sentiment] || sentimentBadge.neutral;
+          return (
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 3,
+                fontWeight: 600,
+                backgroundColor: badge.bg,
+                color: badge.color,
+                fontSize: 9,
+                padding: '2px 6px',
+                borderRadius: 4,
+              }}
+            >
+              {badge.symbol} {badge.label}
+            </span>
+          );
+        })()}
 
         {consequence.probability && (
           <span
@@ -1132,6 +1118,34 @@ export const ConsequenceNode = memo(({ data, draggable }: NodeProps<ConsequenceN
           </span>
         )}
       </Flex>
+
+      {/* Importance indicator — graduated line + text, bottom of node */}
+      {(() => {
+        const cfg = importanceConfig[importance];
+        return (
+          <div style={{ width: '100%', marginTop: 8, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0 }}>
+            <div style={{
+              width: '100%',
+              height: `${cfg.lineWidth}px`,
+              backgroundColor: cfg.lineColor,
+              opacity: cfg.lineOpacity,
+              borderRadius: cfg.lineWidth >= 1.5 ? 1 : 0,
+            }} />
+            <div style={{
+              fontFamily: "'TT Norms Pro Normal', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
+              fontSize: cfg.fontSize,
+              fontWeight: cfg.fontWeight,
+              letterSpacing: cfg.letterSpacing,
+              textTransform: cfg.textTransform as React.CSSProperties['textTransform'],
+              color: cfg.textColor,
+              opacity: cfg.textOpacity,
+              marginTop: 2,
+            }}>
+              {cfg.label}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }, consequenceNodeAreEqual);
