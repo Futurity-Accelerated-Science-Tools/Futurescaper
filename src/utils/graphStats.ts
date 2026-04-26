@@ -132,17 +132,28 @@ export function computeGraphStatistics(
     }
   }
 
-  // Find consequences with no solutions addressing them
-  const solvedIds = new Set(solutions.flatMap(s => s.targetConsequenceIds));
+  // Count ideas/solutions embedded in the consequences array (nodeType: 'solution' | 'idea')
+  const ideaNodes = consequences.filter(c => c.nodeType === 'solution' || c.nodeType === 'idea');
+
+  // Find consequences with no solutions addressing them.
+  // A consequence is "solved" if:
+  //   (a) a legacy Solution object targets it via targetConsequenceIds, OR
+  //   (b) an idea/solution node in the consequences array lists it as a parent
+  const solvedIds = new Set([
+    ...solutions.flatMap(s => s.targetConsequenceIds),
+    ...ideaNodes.flatMap(n => n.parentIds.filter(pid => pid !== 'seed')),
+  ]);
   const unsolvedConsequenceIds = nodes
     .filter(c => !solvedIds.has(c.id))
     .map(c => c.id);
+
+  const totalSolutions = solutions.length + ideaNodes.length;
 
   const cascadingRiskChains = findCascadingRiskChains(consequences);
 
   return {
     totalConsequences: nodes.length,
-    totalSolutions: solutions.length,
+    totalSolutions,
     byCategory,
     bySentiment,
     byOrder,
