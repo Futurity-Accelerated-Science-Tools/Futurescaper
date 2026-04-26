@@ -190,6 +190,9 @@ export function InputForm({ onSubmit, onImport, onManualMode }: InputFormProps) 
     { title: 'Universal Basic Income Implemented', description: 'A nationwide universal basic income program provides every adult citizen with a monthly stipend, fundamentally changing work incentives and social safety nets.' },
     { title: 'Remote Work Becomes the Default', description: 'Most knowledge workers permanently shift to remote work, with offices becoming optional collaboration spaces rather than daily workplaces.' },
     { title: 'Lab-Grown Meat Replaces Farming', description: 'Cultured meat becomes cheaper than traditional farming, leading to a dramatic shift away from animal agriculture toward lab-grown protein production.' },
+    { title: 'Antibiotic Resistance Makes Most Antibiotics Ineffective', description: 'Antimicrobial resistance reaches a tipping point where the majority of existing antibiotics no longer work against common infections, returning medicine to a pre-antibiotic era for routine surgeries and treatments.' },
+    { title: 'Deepfakes Become Indistinguishable From Reality', description: 'AI-generated video and audio become impossible for both humans and detection algorithms to distinguish from authentic recordings, undermining evidence in courts, journalism, and personal relationships.' },
+    { title: 'First Contact: Confirmed Detection of Extraterrestrial Intelligence', description: 'An unambiguous, verified signal of intelligent extraterrestrial origin is detected and publicly confirmed by multiple independent observatories, forcing humanity to confront its place in the universe.' },
   ];
 
   const fillExample = (example: { title: string; description: string }) => {
