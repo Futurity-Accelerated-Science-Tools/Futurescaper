@@ -23,6 +23,8 @@ interface ReadOnlyMapProps {
   nodes: Node[];
   edges: Edge[];
   height?: string;
+  /** When true, reset viewport to fit all nodes (used before export snapshot) */
+  resetView?: boolean;
 }
 
 // ── Ancestor chain BFS ─────────────────────────────────────────────
@@ -128,11 +130,20 @@ function fixEdgeColors(edges: Edge[], isDark: boolean): Edge[] {
   });
 }
 
-function ReadOnlyMapInner({ nodes, edges, height = '500px' }: ReadOnlyMapProps) {
-  const { setCenter, getNode } = useReactFlow();
+function ReadOnlyMapInner({ nodes, edges, height = '500px', resetView }: ReadOnlyMapProps) {
+  const { setCenter, getNode, fitView } = useReactFlow();
   const { colorMode } = useColorMode();
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Reset viewport to fit all nodes when resetView becomes true (export preparation)
+  useEffect(() => {
+    if (resetView) {
+      setActiveNodeId(null);
+      // Small delay to let React clear focus-dimming before fitting
+      setTimeout(() => fitView({ padding: 0.15, duration: 0 }), 50);
+    }
+  }, [resetView, fitView]);
 
   // Center viewport on clicked node, biased toward ancestor centroid (60/40 blend)
   const centerOnNode = useCallback((nodeId: string) => {

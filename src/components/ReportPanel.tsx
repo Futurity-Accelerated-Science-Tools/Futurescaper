@@ -584,7 +584,7 @@ export function ReportPanel({ isOpen, onClose, report, mapNodes, mapEdges, expor
             <Text fontSize="xs" fontWeight="semibold" color="fg.muted" textTransform="uppercase" letterSpacing="wider" mb={3}>
               Consequence Map
             </Text>
-            <ReadOnlyMap nodes={mapNodes} edges={mapEdges} height="480px" />
+            <ReadOnlyMap nodes={mapNodes} edges={mapEdges} height="480px" resetView={exportPreparing} />
           </Box>
         </Box>
 
