@@ -1,9 +1,19 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { viteSingleFile } from 'vite-plugin-singlefile'
+import path from 'path'
 
 export default defineConfig({
   plugins: [react(), viteSingleFile()],
+  resolve: {
+    alias: {
+      // Force ALL packages (including @cosmograph/react which lives in the
+      // root node_modules) to use Futurescaper's React 19 — prevents the
+      // "Invalid hook call" crash from dual-React instances.
+      react: path.resolve(__dirname, 'node_modules/react'),
+      'react-dom': path.resolve(__dirname, 'node_modules/react-dom'),
+    },
+  },
   server: {
     proxy: {
       '/api/news-proxy': {

@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
-import { FutureInput, Consequence, Solution, GenerationConfig, DEFAULT_GENERATION_CONFIG } from './types';
+import { FutureInput, Consequence, Solution, GenerationConfig, DEFAULT_GENERATION_CONFIG, ReportData } from './types';
 import { InputForm } from './components/InputForm';
 import { FuturescapeMap } from './components/FuturescapeMap';
+import { ReportPanel } from './components/ReportPanel';
 import { decodeGraphFromURL } from './shareCodec';
+import { Node, Edge } from 'reactflow';
 import './index.css';
 
 // Type for imported data
@@ -12,7 +14,36 @@ export interface ImportedData {
   solutions: Solution[];
 }
 
-function App() {
+// Declare global window properties for report export mode
+declare global {
+  interface Window {
+    __REPORT_EXPORT_MODE__?: boolean;
+    __REPORT_DATA__?: ReportData;
+    __REPORT_MAP_NODES__?: Node[];
+    __REPORT_MAP_EDGES__?: Edge[];
+  }
+}
+
+// ── Report export view ────────────────────────────────────────
+// Rendered when the page is opened as an exported HTML file.
+// window.__REPORT_EXPORT_MODE__ is set by an injected <script> tag.
+
+function ReportExportView() {
+  return (
+    <ReportPanel
+      isOpen={true}
+      onClose={() => {}}
+      report={window.__REPORT_DATA__!}
+      mapNodes={window.__REPORT_MAP_NODES__ || []}
+      mapEdges={window.__REPORT_MAP_EDGES__ || []}
+      exportMode
+    />
+  );
+}
+
+// ── Normal app ────────────────────────────────────────────────
+
+function MainApp() {
   const [input, setInput] = useState<FutureInput | null>(null);
   const [importedData, setImportedData] = useState<ImportedData | null>(null);
   const [manualMode, setManualMode] = useState(false);
@@ -89,6 +120,16 @@ function App() {
       generationConfig={generationConfig}
     />
   );
+}
+
+// ── Root switch ───────────────────────────────────────────────
+// No hooks in App — just a static branch so React rules-of-hooks are satisfied.
+
+function App() {
+  if (window.__REPORT_EXPORT_MODE__ && window.__REPORT_DATA__) {
+    return <ReportExportView />;
+  }
+  return <MainApp />;
 }
 
 export default App;

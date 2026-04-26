@@ -33,9 +33,9 @@ export function GenerationProgress({ phase, onContinue, onPause, isPaused }: Gen
 
   return (
     <Box bg="bg.canvas" rounded="xl" shadow="sm" borderWidth="1px" borderColor="border.muted" p={4}>
-      <Flex align="center" justify="space-between" mb={4}>
-        <Text fontWeight="semibold" color="fg" fontFamily="heading">
-          {phase === 'complete' ? 'Generation Complete' : 'Generating Map...'}
+      <Flex align="center" justify="space-between" mb={3}>
+        <Text fontSize="sm" fontWeight="semibold" color="fg" fontFamily="heading">
+          {phase === 'complete' ? 'Generation Complete' : 'Generating Map'}
         </Text>
         {phase !== 'complete' && (
           <Flex gap={2}>
@@ -66,23 +66,23 @@ export function GenerationProgress({ phase, onContinue, onPause, isPaused }: Gen
         )}
       </Flex>
 
-      <Flex direction="column" gap={3}>
+      <Flex direction="column" gap={2.5}>
         {phases.map((p) => {
           const status = getPhaseStatus(p.key);
           return (
-            <Flex key={p.key} align="center" gap={3}>
+            <Flex key={p.key} align="center" gap={2.5}>
               {status === 'complete' ? (
-                <Box as={CheckCircle2} w={5} h={5} color="fg.success" flexShrink={0} />
+                <Box as={CheckCircle2} w={4} h={4} color="fg" flexShrink={0} />
               ) : status === 'active' ? (
-                <Box as={Loader2} w={5} h={5} color="brand" flexShrink={0} className="animate-spin" />
+                <Box as={Loader2} w={4} h={4} color="brand" flexShrink={0} className="animate-spin" />
               ) : (
-                <Box as={Circle} w={5} h={5} color="fg.muted" flexShrink={0} />
+                <Box as={Circle} w={4} h={4} color="fg.muted" flexShrink={0} />
               )}
               <Box>
-                <Text fontSize="sm" fontWeight="medium" color={status === 'pending' ? 'fg.muted' : 'fg'}>
+                <Text fontSize="xs" fontWeight="medium" color={status === 'pending' ? 'fg.muted' : 'fg'}>
                   {p.label}
                 </Text>
-                <Text fontSize="xs" color="fg.secondary">
+                <Text fontSize="2xs" color="fg.muted">
                   {p.description}
                 </Text>
               </Box>
@@ -93,12 +93,9 @@ export function GenerationProgress({ phase, onContinue, onPause, isPaused }: Gen
 
       {/* Waiting message */}
       {phase !== 'complete' && (
-        <Box mt={4} p={3} bg="warning/10" borderWidth="1px" borderColor="warning/30" rounded="lg">
-          <Text fontSize="sm" color="fg">
-            <strong>This takes 2-4 minutes.</strong> Feel free to switch tabs — the results will be here when you return!
-          </Text>
-          <Text fontSize="xs" color="fg.secondary" mt={1}>
-            Analyzing consequences across Social, Technological, Economic, Environmental, and Political dimensions...
+        <Box mt={4} pt={3} borderTopWidth="1px" borderColor="border.muted">
+          <Text fontSize="xs" color="fg.muted">
+            This takes 2–4 minutes. Feel free to switch tabs — results will be here when you return.
           </Text>
         </Box>
       )}

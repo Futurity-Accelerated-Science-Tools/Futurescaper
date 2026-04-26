@@ -290,8 +290,8 @@ export function ExportPanel({ input, consequences, solutions = [] }: ExportPanel
               bottom="calc(100% + 8px)"
               left={0}
               right={0}
-              bg="fg"
-              color="bg"
+              bg="bg.canvas"
+              color="fg"
               fontSize="xs"
               px={3}
               py={2}
@@ -300,11 +300,13 @@ export function ExportPanel({ input, consequences, solutions = [] }: ExportPanel
               opacity={0}
               pointerEvents="none"
               transition="opacity 0.15s"
-              boxShadow="lg"
+              boxShadow="sm"
+              borderWidth="1px"
+              borderColor="border.muted"
               lineHeight="1.4"
             >
-              <Text fontWeight="semibold" mb={1}>URL too long for reliable sharing</Text>
-              <Text>
+              <Text fontWeight="medium" color="fg" mb={1}>URL too long for reliable sharing</Text>
+              <Text color="fg.muted">
                 This graph encodes to ~{Math.round(shareURL.length / 1000)}k characters, which exceeds
                 the ~{Math.round(MAX_SAFE_URL_LENGTH / 1000)}k limit supported by most browsers, email clients,
                 and messaging apps. Use "Download As → JSON" to share the full graph as a file instead.
@@ -317,7 +319,10 @@ export function ExportPanel({ input, consequences, solutions = [] }: ExportPanel
                 transform="translateX(-50%) rotate(45deg)"
                 w="8px"
                 h="8px"
-                bg="fg"
+                bg="bg.canvas"
+                borderRight="1px solid"
+                borderBottom="1px solid"
+                borderColor="border.muted"
               />
             </Box>
           )}

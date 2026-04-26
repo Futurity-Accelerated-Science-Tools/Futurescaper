@@ -193,7 +193,7 @@ button:active {
 }
 
 .consequence-node:hover {
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
 }
 
 /* Prevent hover scale when toolbar is showing */

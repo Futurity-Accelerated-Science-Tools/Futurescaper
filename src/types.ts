@@ -256,3 +256,123 @@ export const DEFAULT_GENERATION_CONFIG: GenerationConfig = {
   strategy: 'asymmetric',
   density: 'standard',
 };
+
+// ── Report Types ─────────────────────────────────────────────────
+
+export type ReportGenerationPhase = 'idle' | 'computing-stats' | 'linking-subjects' | 'synthesizing' | 'ready';
+
+export type InsightType = 'critical-risk' | 'hidden-opportunity' | 'convergence-warning' | 'sentiment-inversion' | 'blind-spot' | 'cross-domain-bridge' | 'leverage-point';
+
+/** A convergence point: a node with multiple non-sibling parents */
+export interface ConvergencePoint {
+  nodeId: string;
+  parentIds: string[];
+  parentCount: number;
+}
+
+/** A leverage point: a negative node whose subtree has the most negative descendants */
+export interface LeveragePoint {
+  nodeId: string;
+  negativeDescendantCount: number;
+  descendantIds: string[];
+}
+
+/** A sentiment inversion: a chain where sentiment flips */
+export interface SentimentInversion {
+  /** The chain of consequence IDs showing the inversion path */
+  chain: string[];
+  /** 'positive-to-negative' or 'negative-to-positive' */
+  direction: 'positive-to-negative' | 'negative-to-positive';
+}
+
+/** A cross-domain bridge: a node whose children span many STEEPE categories */
+export interface CrossDomainBridge {
+  nodeId: string;
+  category: STEEPCategory;
+  childCategories: STEEPCategory[];
+  uniqueCategoryCount: number;
+}
+
+/** Structural insights derived from graph topology (no API call) */
+export interface StructuralInsights {
+  convergencePoints: ConvergencePoint[];
+  leveragePoints: LeveragePoint[];
+  sentimentInversions: SentimentInversion[];
+  blindSpotCategories: STEEPCategory[];
+  crossDomainBridges: CrossDomainBridge[];
+}
+
+/** AI-generated insight card */
+export interface InsightCard {
+  type: InsightType;
+  title: string;
+  description: string;
+  consequenceIds: string[];
+}
+
+/** AI-generated or graph-derived idea recommendation */
+export interface IdeaRecommendation {
+  title: string;
+  description: string;
+  addressesInsight: string;
+  feasibility: 'high' | 'medium' | 'low';
+  isExisting: boolean;
+  existingNodeId?: string;
+}
+
+/** Layer 1 — algorithmic statistics computed from graph data (no API call) */
+export interface GraphStatistics {
+  totalConsequences: number;
+  totalSolutions: number;
+  byCategory: Record<STEEPCategory, number>;
+  bySentiment: Record<Sentiment, number>;
+  byOrder: Record<ConsequenceOrder, number>;
+  byProbability: Record<Probability, number>;
+  byImportance: Record<Importance, number>;
+  byTimeFrame: Record<TimeFrame, number>;
+  wildcardCount: number;
+  criticalNegativeCount: number;
+  /** Consequence IDs that have no solutions targeting them */
+  unsolvedConsequenceIds: string[];
+  /** Consequence IDs with importance critical/high AND sentiment negative */
+  highRiskIds: string[];
+  /** Cascading risk: negative consequences whose children are also negative */
+  cascadingRiskChains: string[][];
+}
+
+/** A single section of the report */
+export interface ReportSection {
+  id: string;
+  title: string;
+  icon: string;
+  type: 'ai-prose' | 'statistics' | 'methodology';
+  content: string;
+  /** Consequence IDs that should be rendered as callout boxes in this section */
+  highlightedConsequenceIds?: string[];
+  /** Optional sub-sections for structured content within a section */
+  subsections?: ReportSubSection[];
+}
+
+export interface ReportSubSection {
+  id: string;
+  title: string;
+  type: 'text' | 'metric' | 'list' | 'distribution';
+  content: string;
+  /** For 'distribution' type — category label → count */
+  data?: Record<string, number>;
+}
+
+/** Complete report output from the generation pipeline */
+export interface ReportData {
+  generatedAt: string;
+  input: FutureInput;
+  statistics: GraphStatistics;
+  structuralInsights: StructuralInsights;
+  sections: ReportSection[];
+  insightCards: InsightCard[];
+  ideaRecommendations: IdeaRecommendation[];
+  /** Full consequence array for rendering callout boxes and the embedded map */
+  consequences: Consequence[];
+  /** Connected subjects from FAST knowledge base */
+  subjects?: import('./api/subjects').RelevantSubject[];
+}

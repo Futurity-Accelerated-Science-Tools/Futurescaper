@@ -32,9 +32,9 @@ function DeleteSection({ consequence, children, onEdit, onDelete }: {
         <Box bg="error/8" borderWidth="1px" borderColor="error/20" rounded="lg" p={3}>
           <Flex align="center" gap={2} mb={2}>
             <Box as={AlertTriangle} w={4} h={4} color="fg.error" />
-            <Text fontSize="sm" fontWeight="medium" color="fg.error">Are you sure you want to delete this node?</Text>
+            <Text fontSize="sm" fontWeight="medium" color="fg.error">Delete this node?</Text>
           </Flex>
-          <Text fontSize="xs" color="fg.error" mb={3}>This action cannot be undone.</Text>
+          <Text fontSize="xs" color="fg.muted" mb={3}>This action cannot be undone.</Text>
           <Flex gap={2}>
             <Button
               flex={1}
@@ -148,7 +148,7 @@ export function DetailPanel({ consequence, allConsequences, onClose, onEdit, onD
   const orderLabels = ['', 'First-Order', 'Second-Order', 'Third-Order'];
 
   return (
-    <Box bg="bg.canvas" rounded="xl" shadow="lg" borderWidth="1px" borderColor="border.muted" p={5} w="320px" className="fade-in-up">
+    <Box bg="bg.canvas" rounded="xl" shadow="sm" borderWidth="1px" borderColor="border.muted" p={5} w="320px" className="fade-in-up">
       <Flex align="start" justify="space-between" mb={4}>
         <Box
           display="inline-flex"
@@ -174,8 +174,6 @@ export function DetailPanel({ consequence, allConsequences, onClose, onEdit, onD
         p={4}
         mb={4}
         bg="bg.hover"
-        borderLeftWidth="4px"
-        borderColor="border.muted"
       >
         <Flex align="start" gap={2}>
           <Box as={SentimentIcon} w={5} h={5} flexShrink={0} mt={0.5} color="fg" />
@@ -217,11 +215,32 @@ export function DetailPanel({ consequence, allConsequences, onClose, onEdit, onD
         {!isSolutionOrIdea && (
           <Flex align="center" gap={2} fontSize="sm">
             <Text color="fg.secondary">Sentiment:</Text>
-            <Flex align="center" gap={1} fontWeight="medium" color="fg" textTransform="capitalize">
+            <Box
+              display="inline-flex"
+              alignItems="center"
+              gap={1}
+              px={2}
+              py={0.5}
+              rounded="md"
+              fontSize="xs"
+              fontWeight="medium"
+              style={{
+                backgroundColor: consequence.sentiment === 'positive'
+                  ? (isDark ? 'rgba(34,197,94,0.15)' : '#e6fff5')
+                  : consequence.sentiment === 'negative'
+                    ? (isDark ? 'rgba(239,68,68,0.15)' : '#fff0f3')
+                    : (isDark ? 'rgba(148,163,184,0.15)' : '#e8eaef'),
+                color: consequence.sentiment === 'positive'
+                  ? (isDark ? '#4ade80' : '#0a6847')
+                  : consequence.sentiment === 'negative'
+                    ? (isDark ? '#f87171' : '#a4133c')
+                    : (isDark ? '#94a3b8' : '#2d3341'),
+              }}
+            >
               <Text as="span">{sentimentSymbol}</Text>
-              <Box as={SentimentIcon} w={4} h={4} />
-              <Text as="span">{consequence.sentiment}</Text>
-            </Flex>
+              <Box as={SentimentIcon} w={3.5} h={3.5} />
+              <Text as="span" textTransform="capitalize">{consequence.sentiment}</Text>
+            </Box>
           </Flex>
         )}
       </Flex>

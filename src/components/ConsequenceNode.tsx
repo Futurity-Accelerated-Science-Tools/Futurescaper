@@ -1204,16 +1204,15 @@ function SeedActionToolbar({
 
 // ─── SeedNode ─────────────────────────────────────────────────────
 const SEED_BRAND = '#0005e9';
-const SEED_BRAND_GLOW = 'rgba(0,5,233,0.35)';
 
 export const SeedNode = memo(({ data }: NodeProps<SeedNodeData>) => {
   const { title, description, isSelected, isGeneratingChildren, isGenerationInProgress, isConnectValidTarget, isConnectMode, onClick, onAddChild, onGenerateChildren } = data;
 
   const seedShadow = isConnectValidTarget
-    ? '0 0 0 3px #22d3ee, 0 0 16px rgba(34,211,238,0.5)'
+    ? '0 0 0 2px #22d3ee, 0 0 10px rgba(34,211,238,0.3)'
     : isSelected
-      ? `0 0 0 2px #fff, 0 0 0 4px ${SEED_BRAND}, 0 0 28px ${SEED_BRAND_GLOW}`
-      : `0 2px 12px rgba(0,5,233,0.25)`;
+      ? `0 0 0 2px #fff, 0 0 0 3px ${SEED_BRAND}, 0 2px 12px rgba(0,5,233,0.15)`
+      : `0 2px 8px rgba(0,5,233,0.15)`;
 
   return (
     <div

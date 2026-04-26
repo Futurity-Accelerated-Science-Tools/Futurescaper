@@ -34,13 +34,18 @@ import {
   SOLUTION_COLORS,
   GenerationConfig,
   DEFAULT_GENERATION_CONFIG,
+  ReportData,
+  ReportGenerationPhase,
 } from '../types';
 import { generateComprehensiveFuturescape, hasApiKey, GenerationPhase } from '../api/claude';
 import { generateConsequences } from '../mockData';
 import { ConsequenceNode, SeedNode, ConsequenceNodeData } from './ConsequenceNode';
 import { SteepIcon, getSteepMutedBg, getSteepTextColor } from './SteepIcon';
 import { ExportPanel } from './ExportPanel';
-import { ArrowLeft, AlertCircle, Lightbulb, FileText, Star, Target, Layers, TrendingUp, TrendingDown, Minus, Loader2, X, Send, Sparkles, Zap, Hammer, LayoutGrid, Filter, ChevronRight, ChevronLeft, Sun, Moon, Eye, EyeOff, Cable, Unlink, ArrowRightLeft } from 'lucide-react';
+import { ReportPanel } from './ReportPanel';
+import { computeGraphStatistics, computeStructuralInsights } from '../utils/graphStats';
+import { generateReport } from '../api/reportGeneration';
+import { ArrowLeft, AlertCircle, Lightbulb, FileText, Star, Target, Layers, TrendingUp, TrendingDown, Minus, Loader2, X, Send, Sparkles, Zap, Hammer, LayoutGrid, Filter, ChevronRight, ChevronLeft, Sun, Moon, Eye, EyeOff, Cable, Unlink, ArrowRightLeft, CheckCircle2 } from 'lucide-react';
 import { expandNodeConsequences, freePromptExpand, generateSolutionIdeas, generateConsequencesWithAI, generateChildConsequencesWithAI } from '../api/claude';
 import { findRelevantSubjects, RelevantSubject } from '../api/subjects';
 import { RelatedSubjects } from './RelatedSubjects';
@@ -137,7 +142,14 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
   const [relatedSubjects, setRelatedSubjects] = useState<RelevantSubject[]>([]);
   const [isLoadingSubjects, setIsLoadingSubjects] = useState(false);
   const subjectsRequested = useRef(false);
+  // Track how many consequences existed when subjects were last computed
+  const subjectsConsequenceCount = useRef(0);
   const generationStarted = useRef(importedData ? true : (manualMode ? true : false));
+
+  // ── Report state ──
+  const [reportData, setReportData] = useState<ReportData | null>(null);
+  const [reportPhase, setReportPhase] = useState<ReportGenerationPhase>('idle');
+  const [reportPanelOpen, setReportPanelOpen] = useState(false);
 
   // ── Interactive node state (radial menu / inline editing) ──
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
@@ -287,14 +299,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     return m;
   }, [consequences]);
 
-  // Maps each node to its primary parent (first in parentIds) — used for ancestor chain traversal
-  const parentMap = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const c of consequences) {
-      if (c.parentIds.length > 0) m.set(c.id, c.parentIds[0]);
-    }
-    return m;
-  }, [consequences]);
+
 
   // All consequences are shown, but some may be dimmed
   const filteredConsequences = useMemo(() => {
@@ -1204,6 +1209,8 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     // Build the elevated set for z-index
     const elevatedNodes = getAncestorChain(activeNodeId);
     const hasElevation = elevatedNodes.size > 0;
+    // Preserve focus dimming when a non-seed node is actively focused
+    const hasFocus = !!activeNodeId && activeNodeId !== 'seed';
 
     setNodes(prev => {
       // Remove deleted nodes
@@ -1235,7 +1242,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
           ...n,
           zIndex: hasElevation && elevatedNodes.has(n.id) ? (activeNodeId === n.id ? 1001 : 1000) : undefined,
           draggable: !c.id.startsWith('placeholder-') && editingNodeId !== c.id && !isGenerationRunning,
-          data: buildConsequenceData(c),
+          data: { ...buildConsequenceData(c), ...(hasFocus ? { isFocusDimmed: !elevatedNodes.has(n.id) } : {}) },
         };
       });
 
@@ -1273,7 +1280,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
           position: pos,
           draggable: !c.id.startsWith('placeholder-') && !isEditing && !isGenerationRunning,
           zIndex: elevatedZ ?? newNodeZ,
-          data: buildConsequenceData(c),
+          data: { ...buildConsequenceData(c), ...(hasFocus ? { isFocusDimmed: !elevatedNodes.has(c.id) } : {}) },
         });
       }
 
@@ -1316,6 +1323,9 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
   const updateNodeDataOnly = useCallback(() => {
     const elevatedNodes = getAncestorChain(activeNodeId);
     const hasElevation = elevatedNodes.size > 0;
+    // When a non-seed node is focused, propagate focus dimming so it
+    // isn't lost when this function overwrites node data.
+    const hasFocus = !!activeNodeId && activeNodeId !== 'seed';
 
     setNodes(prev => prev.map(n => {
       if (n.id === 'seed') {
@@ -1342,7 +1352,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
         ...n,
         zIndex: isEditingThis ? 1002 : chainZ,
         draggable: !c.id.startsWith('placeholder-') && !isEditingThis && !isGenerationRunning,
-        data: buildConsequenceData(c),
+        data: { ...buildConsequenceData(c), ...(hasFocus ? { isFocusDimmed: !elevatedNodes.has(n.id) } : {}) },
       };
     }));
 
@@ -1703,34 +1713,77 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     generationStarted.current = false;
   };
 
+  // Shared subject-finding function — used by auto-trigger, retry, and report pipeline
+  const refreshSubjects = useCallback(async (): Promise<RelevantSubject[]> => {
+    setIsLoadingSubjects(true);
+    setRelatedSubjects([]);
+    try {
+      const subjects = await findRelevantSubjects(effectiveInput, consequences);
+      setRelatedSubjects(subjects);
+      subjectsRequested.current = true;
+      subjectsConsequenceCount.current = consequences.length;
+      return subjects;
+    } catch (err) {
+      console.error('Failed to find related subjects:', err);
+      return [];
+    } finally {
+      setIsLoadingSubjects(false);
+    }
+  }, [effectiveInput, consequences]);
+
+  // Returns true if subjects are stale (graph changed since last computation)
+  const areSubjectsStale = useCallback(() => {
+    return !subjectsRequested.current || consequences.length !== subjectsConsequenceCount.current;
+  }, [consequences.length]);
+
   // Find related subjects once generation completes
   useEffect(() => {
     if (generationPhase !== 'complete' || subjectsRequested.current || consequences.length === 0) return;
     if (!hasApiKey()) return; // Need API key for subject matching
-    subjectsRequested.current = true;
-    setIsLoadingSubjects(true);
-
-    findRelevantSubjects(effectiveInput, consequences)
-      .then(subjects => {
-        setRelatedSubjects(subjects);
-      })
-      .catch(err => {
-        console.error('Failed to find related subjects:', err);
-      })
-      .finally(() => {
-        setIsLoadingSubjects(false);
-      });
-  }, [generationPhase, consequences, input]);
+    refreshSubjects();
+  }, [generationPhase, consequences, input, refreshSubjects]);
 
   const handleRetrySubjects = () => {
-    subjectsRequested.current = false;
-    setRelatedSubjects([]);
-    setIsLoadingSubjects(true);
-    findRelevantSubjects(effectiveInput, consequences)
-      .then(subjects => setRelatedSubjects(subjects))
-      .catch(err => console.error('Failed to find related subjects:', err))
-      .finally(() => setIsLoadingSubjects(false));
+    refreshSubjects();
   };
+
+  // ── Report generation orchestration ──
+  const handleGenerateReport = useCallback(async () => {
+    if (consequences.length === 0 || !input) return;
+
+    try {
+      // Layer 1: Compute stats + structural insights (instant)
+      setReportPhase('computing-stats');
+      const stats = computeGraphStatistics(consequences, []); // solutions array when available
+      const insights = computeStructuralInsights(consequences, stats);
+
+      // Layer 2: Refresh subjects if stale (or if never run)
+      setReportPhase('linking-subjects');
+      let subjects = relatedSubjects;
+      if (areSubjectsStale()) {
+        subjects = await refreshSubjects();
+      }
+
+      // Layer 3: AI synthesis
+      setReportPhase('synthesizing');
+      const report = await generateReport(
+        effectiveInput,
+        consequences,
+        [], // solutions array when available
+        subjects,
+        stats,
+        insights,
+        (msg) => console.log('[Report]', msg),
+      );
+
+      setReportData(report);
+      setReportPhase('ready');
+      setReportPanelOpen(true);
+    } catch (err) {
+      console.error('Report generation failed:', err);
+      setReportPhase('idle');
+    }
+  }, [consequences, input, effectiveInput, relatedSubjects, areSubjectsStale, refreshSubjects]);
 
   // Highlight filter handlers (for dimming)
   const toggleHighlightCategory = (cat: STEEPCategory) => {
@@ -1981,6 +2034,9 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
         overflowY="auto"
         overflowX="hidden"
         h="100%"
+        opacity={reportPhase !== 'idle' && reportPhase !== 'ready' ? 0.4 : 1}
+        pointerEvents={reportPhase !== 'idle' && reportPhase !== 'ready' ? 'none' : 'auto'}
+        transition="opacity 0.3s"
       >
         <Box p={4} borderBottom="1px solid" borderColor="border.muted">
           <Flex
@@ -1999,9 +2055,59 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
           <Text fontSize="sm" color="fg.secondary" maxH="128px" overflowY="auto">{input.description}</Text>
         </Box>
 
+        {/* Generate Futurescape Report */}
+        {consequences.length > 0 && hasApiKey() && (
+          <Box px={4} py={3} borderBottom="1px solid" borderColor="border.muted">
+            <Button
+              onClick={reportPhase === 'ready' ? () => setReportPanelOpen(true) : handleGenerateReport}
+              disabled={reportPhase !== 'idle' && reportPhase !== 'ready'}
+              w="full"
+              size="sm"
+              fontFamily="heading"
+              fontWeight={600}
+              fontSize="13px"
+              gap={2}
+              bg="brand.500"
+              color="white"
+              _hover={{ bg: 'brand.600' }}
+              _disabled={{ opacity: 0.7, cursor: 'not-allowed' }}
+            >
+              {reportPhase === 'idle' || reportPhase === 'ready' ? (
+                <>
+                  <Box as={FileText} w={4} h={4} />
+                  {reportPhase === 'ready' ? 'View Futurescape Report' : 'Generate Futurescape Report'}
+                </>
+              ) : (
+                <>
+                  <Box as={Loader2} w={4} h={4} className="animate-spin" />
+                  {reportPhase === 'computing-stats' && 'Computing statistics...'}
+                  {reportPhase === 'linking-subjects' && 'Linking subjects...'}
+                  {reportPhase === 'synthesizing' && 'Writing report...'}
+                </>
+              )}
+            </Button>
+            {reportPhase === 'ready' && (
+              <Text
+                as="button"
+                onClick={handleGenerateReport}
+                display="block"
+                w="full"
+                textAlign="center"
+                mt={1.5}
+                fontSize="xs"
+                color="fg.muted"
+                _hover={{ color: 'fg' }}
+                cursor="pointer"
+              >
+                Regenerate
+              </Text>
+            )}
+          </Box>
+        )}
+
         {/* Verbosity Toggle */}
         <Box p={4} borderBottom="1px solid" borderColor="border.muted">
-          <Text fontSize="xs" fontWeight="semibold" color="fg.muted" mb={2}>AI Verbosity</Text>
+          <Text fontSize="xs" fontWeight="semibold" color="fg.muted" mb={2}>AI Output Style (Node Generation)</Text>
           <Flex gap={1}>
             {(['concise', 'detailed'] as const).map((v) => (
               <Box
@@ -2018,9 +2124,9 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
                 fontWeight={verbosity === v ? 'semibold' : 'normal'}
                 cursor="pointer"
                 transition="all 0.15s"
-                borderColor={verbosity === v ? 'brand/40' : 'border.muted'}
-                bg={verbosity === v ? 'brand/12' : 'transparent'}
-                color={verbosity === v ? 'fg' : 'fg.muted'}
+                borderColor={verbosity === v ? 'fg' : 'border.muted'}
+                bg={verbosity === v ? 'fg' : 'transparent'}
+                color={verbosity === v ? 'bg.canvas' : 'fg.muted'}
                 _hover={verbosity !== v ? { bg: 'bg.hover' } : undefined}
               >
                 {v.charAt(0).toUpperCase() + v.slice(1)}
@@ -2098,7 +2204,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
               </Box>
               <Box fontSize="xs" color="fg.muted">
                 {generationPhase === 'complete' ? (
-                  <Text as="span" color="fg.success" fontWeight="medium">✓ Analysis complete ({stats.total} consequences)</Text>
+                  <Text as="span" color="fg" fontWeight="medium">Analysis complete ({stats.total} consequences)</Text>
                 ) : (
                   progressMessage || `Analyzing ${generationPhase}...`
                 )}
@@ -2856,6 +2962,61 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
         )}
 
         {/* Floating prompt bar removed — low usage, obscured nodes */}
+
+        {/* Report generation progress overlay */}
+        {reportPhase !== 'idle' && reportPhase !== 'ready' && (
+          <Flex position="absolute" inset={0} align="center" justify="center" zIndex={25} bg="blackAlpha.200" backdropFilter="blur(4px)">
+            <Box bg="bg.muted" backdropFilter="blur(12px)" rounded="2xl" shadow="2xl" border="1px solid" borderColor="border.muted" px={8} py={6} maxW="md" textAlign="center">
+              <Flex justify="center" mb={4}>
+                <Box position="relative">
+                  <Loader2 style={{ width: 40, height: 40, color: 'var(--chakra-colors-brand)' }} className="animate-spin" />
+                  <Box as={FileText} style={{ width: 18, height: 18, color: 'var(--chakra-colors-brand)', position: 'absolute', top: -2, right: -6 }} className="animate-pulse" />
+                </Box>
+              </Flex>
+              <Text fontWeight="bold" color="fg" fontSize="lg" mb={1} fontFamily="heading">
+                {reportPhase === 'computing-stats' ? 'Analyzing Consequence Map' :
+                 reportPhase === 'linking-subjects' ? 'Linking Subjects to Consequences' :
+                 'Writing Futurescape Report'}
+              </Text>
+              <Text fontSize="sm" color="fg.muted" mb={4}>
+                {reportPhase === 'computing-stats' ? 'Computing statistics and risk indicators...' :
+                 reportPhase === 'linking-subjects' ? 'Identifying subject–consequence relationships...' :
+                 'Synthesizing executive summary, risks, and recommendations...'}
+              </Text>
+              <Box w="100%" bg="bg.active" rounded="full" h="10px" overflow="hidden">
+                <Box
+                  bg="brand"
+                  h="10px"
+                  rounded="full"
+                  transition="all 0.7s ease-out"
+                  style={{ width: reportPhase === 'computing-stats' ? '20%' : reportPhase === 'linking-subjects' ? '50%' : '80%' }}
+                />
+              </Box>
+              <Flex justify="center" gap={6} mt={4}>
+                {(['computing-stats', 'linking-subjects', 'synthesizing'] as const).map((p, i) => {
+                  const phases: ReportGenerationPhase[] = ['computing-stats', 'linking-subjects', 'synthesizing'];
+                  const currentIdx = phases.indexOf(reportPhase as any);
+                  const thisIdx = i;
+                  const status = thisIdx < currentIdx ? 'done' : thisIdx === currentIdx ? 'active' : 'pending';
+                  return (
+                    <Flex key={p} align="center" gap={1.5} fontSize="xs" color={status === 'pending' ? 'fg.muted' : 'fg'}>
+                      {status === 'done' ? (
+                        <Box as={CheckCircle2} w={3.5} h={3.5} color="fg" />
+                      ) : status === 'active' ? (
+                        <Box as={Loader2} w={3.5} h={3.5} color="brand" className="animate-spin" />
+                      ) : (
+                        <Box w={3.5} h={3.5} rounded="full" border="1.5px solid" borderColor="fg.muted" />
+                      )}
+                      <Text fontWeight={status === 'active' ? 'semibold' : 'normal'}>
+                        {i === 0 ? 'Statistics' : i === 1 ? 'Subjects' : 'Report'}
+                      </Text>
+                    </Flex>
+                  );
+                })}
+              </Flex>
+            </Box>
+          </Flex>
+        )}
       </Box>
 
       </Flex>
@@ -2950,6 +3111,14 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
           </Box>
         </Box>
       )}
+      {/* Report Panel Overlay */}
+      <ReportPanel
+        isOpen={reportPanelOpen}
+        onClose={() => setReportPanelOpen(false)}
+        report={reportData}
+        mapNodes={nodes}
+        mapEdges={edges}
+      />
     </Flex>
   );
 }
