@@ -159,6 +159,47 @@ const EXPORT_INTERACTIVITY_SCRIPT = `<script>
   var cards = document.getElementById('export-tooltip-cards');
   if (!cards) return;
 
+  // ── Shared tooltip logic ──────────────────────────────────────
+  var activeTooltip = null;
+
+  function dismissTooltip() {
+    if (activeTooltip) {
+      activeTooltip.remove();
+      activeTooltip = null;
+    }
+  }
+
+  /** Show a floating card tooltip near the given element. */
+  function showCardTooltip(anchorEl, cardEl, e) {
+    if (e) e.stopPropagation();
+    dismissTooltip();
+
+    var rect = anchorEl.getBoundingClientRect();
+    var tooltip = document.createElement('div');
+    tooltip.className = 'export-tooltip';
+
+    var clone = cardEl.cloneNode(true);
+    clone.style.display = 'block';
+    tooltip.appendChild(clone);
+
+    // Position: prefer below, flip above if near bottom
+    var spaceBelow = window.innerHeight - rect.bottom;
+    if (spaceBelow > 280) {
+      tooltip.style.top = (rect.bottom + window.scrollY + 8) + 'px';
+    } else {
+      tooltip.style.top = (rect.top + window.scrollY - 280) + 'px';
+    }
+
+    // Center horizontally on anchor, clamp to viewport
+    var left = rect.left + rect.width / 2 - 140;
+    left = Math.max(8, Math.min(left, window.innerWidth - 296));
+    tooltip.style.left = left + 'px';
+    tooltip.style.position = 'absolute';
+
+    document.body.appendChild(tooltip);
+    activeTooltip = tooltip;
+  }
+
   // ── Risk chart: click dot → show card in sidebar ──────────────
   var sidebar = document.querySelector('[data-risk-sidebar]');
   var sidebarDefault = sidebar ? sidebar.innerHTML : '';
@@ -178,59 +219,29 @@ const EXPORT_INTERACTIVITY_SCRIPT = `<script>
   });
 
   // ── Consequence chips: click → show floating card ─────────────
-  var activeTooltip = null;
-
-  function dismissTooltip() {
-    if (activeTooltip) {
-      activeTooltip.remove();
-      activeTooltip = null;
-    }
-  }
-
   document.querySelectorAll('[data-chip-id]').forEach(function(chip) {
     var id = chip.getAttribute('data-chip-id');
     var card = cards.querySelector('[data-tooltip-card="' + id + '"]');
     if (!card) return;
-
-    chip.addEventListener('click', function(e) {
-      e.stopPropagation();
-      dismissTooltip();
-
-      var rect = chip.getBoundingClientRect();
-      var tooltip = document.createElement('div');
-      tooltip.className = 'export-tooltip';
-
-      var clone = card.cloneNode(true);
-      clone.style.display = 'block';
-      tooltip.appendChild(clone);
-
-      // Position: prefer below, flip above if near bottom
-      var spaceBelow = window.innerHeight - rect.bottom;
-      if (spaceBelow > 280) {
-        tooltip.style.top = (rect.bottom + window.scrollY + 8) + 'px';
-      } else {
-        tooltip.style.top = (rect.top + window.scrollY - 280) + 'px';
-      }
-
-      // Center horizontally on chip, clamp to viewport
-      var left = rect.left + rect.width / 2 - 140;
-      left = Math.max(8, Math.min(left, window.innerWidth - 296));
-      tooltip.style.left = left + 'px';
-      tooltip.style.position = 'absolute';
-
-      document.body.appendChild(tooltip);
-      activeTooltip = tooltip;
-    });
+    chip.addEventListener('click', function(e) { showCardTooltip(chip, card, e); });
   });
 
-  // Click anywhere else → dismiss tooltip
+  // ── Map nodes: click → show floating card ─────────────────────
+  document.querySelectorAll('.react-flow__node').forEach(function(node) {
+    var id = node.getAttribute('data-id');
+    if (!id || id === 'seed') return;
+    var card = cards.querySelector('[data-tooltip-card="' + id + '"]');
+    if (!card) return;
+    node.style.cursor = 'pointer';
+    node.addEventListener('click', function(e) { showCardTooltip(node, card, e); });
+  });
+
+  // ── Global dismiss ────────────────────────────────────────────
   document.addEventListener('click', function(e) {
     if (activeTooltip && !activeTooltip.contains(e.target)) {
       dismissTooltip();
     }
   });
-
-  // Escape key → dismiss tooltip
   document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') dismissTooltip();
   });
