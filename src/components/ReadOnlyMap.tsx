@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { Box } from '@chakra-ui/react';
 import ReactFlow, {
   Node,
