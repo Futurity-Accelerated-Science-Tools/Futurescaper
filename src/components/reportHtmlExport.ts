@@ -252,15 +252,17 @@ const EXPORT_INTERACTIVITY_SCRIPT = `<script>
 // ── Main export function ────────────────────────────────────────
 
 /**
- * Snapshot the rendered report panel and download as a standalone HTML file.
+ * Build a standalone HTML string from the rendered report panel.
  *
  * Call this AFTER expanding all sections (the caller manages that state).
  * The panelEl should be the live DOM element with data-report-panel.
+ *
+ * Returns the full HTML string, or null on failure.
  */
-export async function snapshotReportToHtml(
+export async function buildReportHtmlString(
   panelEl: HTMLElement,
   report: ReportData,
-): Promise<void> {
+): Promise<string | null> {
   try {
     // 1. Snapshot canvas elements BEFORE cloning (canvas content doesn't survive clone)
     const canvasSnapshots = snapshotCanvases(panelEl);
@@ -332,23 +334,42 @@ ${EXPORT_INTERACTIVITY_SCRIPT}
 </body>
 </html>`;
 
-    // 7. Trigger download
-    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    const slug = title
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/(^-|-$)/g, '')
-      .slice(0, 60);
-    a.download = `${slug}-report.html`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    return html;
   } catch (err) {
-    console.error('Report HTML export failed:', err);
-    alert('Failed to export report. See console for details.');
+    console.error('Report HTML build failed:', err);
+    return null;
   }
+}
+
+/**
+ * Snapshot the rendered report panel and download as a standalone HTML file.
+ *
+ * Call this AFTER expanding all sections (the caller manages that state).
+ * The panelEl should be the live DOM element with data-report-panel.
+ */
+export async function snapshotReportToHtml(
+  panelEl: HTMLElement,
+  report: ReportData,
+): Promise<void> {
+  const html = await buildReportHtmlString(panelEl, report);
+  if (!html) {
+    alert('Failed to export report. See console for details.');
+    return;
+  }
+
+  const title = report.input.title || 'Futurescaper Report';
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '')
+    .slice(0, 60);
+  a.download = `${slug}-report.html`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }

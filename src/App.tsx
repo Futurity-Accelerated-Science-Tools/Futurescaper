@@ -3,6 +3,7 @@ import { FutureInput, Consequence, Solution, GenerationConfig, DEFAULT_GENERATIO
 import { InputForm } from './components/InputForm';
 import { FuturescapeMap } from './components/FuturescapeMap';
 import { ReportPanel } from './components/ReportPanel';
+import { FuturescapeViewer } from './components/FuturescapeViewer';
 import { decodeGraphFromURL } from './shareCodec';
 import { Node, Edge } from 'reactflow';
 import './index.css';
@@ -122,13 +123,51 @@ function MainApp() {
   );
 }
 
+// ── Viewer route ─────────────────────────────────────────────
+// Detects /#/view/{slug} in the URL hash and renders the read-only viewer.
+
+function ViewerApp() {
+  const [slug, setSlug] = useState<string | null>(null);
+
+  useEffect(() => {
+    function parseHash() {
+      const hash = window.location.hash;
+      const match = hash.match(/^#\/view\/(.+)$/);
+      setSlug(match ? decodeURIComponent(match[1]) : null);
+    }
+
+    parseHash();
+    window.addEventListener('hashchange', parseHash);
+    return () => window.removeEventListener('hashchange', parseHash);
+  }, []);
+
+  if (!slug) return null;
+
+  return (
+    <FuturescapeViewer
+      slug={slug}
+      onBack={() => {
+        window.location.hash = '';
+      }}
+    />
+  );
+}
+
 // ── Root switch ───────────────────────────────────────────────
 // No hooks in App — just a static branch so React rules-of-hooks are satisfied.
 
 function App() {
+  // 1. Report export mode (standalone HTML file)
   if (window.__REPORT_EXPORT_MODE__ && window.__REPORT_DATA__) {
     return <ReportExportView />;
   }
+
+  // 2. Viewer mode (/#/view/{slug})
+  if (window.location.hash.startsWith('#/view/')) {
+    return <ViewerApp />;
+  }
+
+  // 3. Normal app
   return <MainApp />;
 }
 

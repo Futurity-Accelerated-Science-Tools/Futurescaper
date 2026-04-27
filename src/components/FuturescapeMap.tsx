@@ -43,6 +43,7 @@ import { ConsequenceNode, SeedNode, ConsequenceNodeData } from './ConsequenceNod
 import { SteepIcon, getSteepMutedBg, getSteepTextColor } from './SteepIcon';
 import { ExportPanel } from './ExportPanel';
 import { ReportPanel } from './ReportPanel';
+import { SaveToCloudButton } from './SaveToCloudButton';
 import { computeGraphStatistics, computeStructuralInsights } from '../utils/graphStats';
 import { generateReport } from '../api/reportGeneration';
 import { ArrowLeft, AlertCircle, Lightbulb, FileText, Star, Target, Layers, TrendingUp, TrendingDown, Minus, Loader2, X, Send, Sparkles, Zap, Hammer, LayoutGrid, Filter, ChevronRight, ChevronLeft, Sun, Moon, Eye, EyeOff, Cable, Unlink, ArrowRightLeft, CheckCircle2 } from 'lucide-react';
@@ -2317,6 +2318,18 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
         />
 
         <ExportPanel consequences={consequences} input={input} solutions={[]} />
+
+        {/* Save to Cloud */}
+        <SaveToCloudButton
+          input={input}
+          consequences={consequences}
+          solutions={[]}
+          reportData={reportData}
+          reactFlowInstance={reactFlowInstanceRef.current}
+          mapContainerRef={mapContainerRef}
+          colorMode={colorMode as 'light' | 'dark'}
+          toggleColorMode={toggleColorMode}
+        />
       </Flex>
       </Flex>
 
