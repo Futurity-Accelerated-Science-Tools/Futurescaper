@@ -1,22 +1,23 @@
 import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { Box, Flex, Text, Button } from '@chakra-ui/react';
-import ReactFlow, {
+import {
+  ReactFlow,
   Background,
   Controls,
   MiniMap,
-  Node,
-  Edge,
   useNodesState,
   useEdgesState,
   ConnectionMode,
   MarkerType,
-  ReactFlowInstance,
   BackgroundVariant,
   BaseEdge,
-  EdgeProps,
+  type Node,
+  type Edge,
+  type ReactFlowInstance,
+  type EdgeProps,
   Position as RFPosition,
-} from 'reactflow';
-import 'reactflow/dist/style.css';
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
 
 import {
   FutureInput,

@@ -155,17 +155,18 @@ export function buildFirstOrderPrompt(input: FutureInput, count?: number, existi
   const perspectiveText = input.perspective
     ? `
 
-## CRITICAL: PERSPECTIVE FOR SENTIMENT EVALUATION
+## CRITICAL: PERSPECTIVE — ${input.perspective}
+**This entire analysis is conducted FROM THE VIEWPOINT of: ${input.perspective}**
+
+### Content Framing
+Generate consequences that are RELEVANT and MATERIAL to "${input.perspective}". At least 70% of consequences should directly affect this stakeholder's operations, strategy, market position, or interests. The remaining 30% can cover broader societal consequences, but EVEN THESE should be framed in terms of how they impact "${input.perspective}".
+
+Ask yourself for each consequence: "Would ${input.perspective} care about this? Would this come up in their strategic planning?" If not, replace it with something they WOULD care about.
+
+### Sentiment Evaluation
 **ALL sentiment ratings MUST be from the perspective of: ${input.perspective}**
 
 This is NOT about objective "good" or "bad" - it's about what benefits or harms THIS SPECIFIC STAKEHOLDER.
-
-Examples of correct perspective-based sentiment:
-- "U.S. defense stocks surge" → If perspective is "EU Commission": sentiment = "NEGATIVE" (shows EU's weakened position/alliance fracture)
-- "NATO alliance fractures" → If perspective is "EU Commission": sentiment = "NEGATIVE" (EU loses security)
-- "Russia gains Arctic influence" → If perspective is "EU Commission": sentiment = "NEGATIVE" (strategic threat)
-- "EU develops independent defense" → If perspective is "EU Commission": sentiment = "POSITIVE" (EU gains autonomy)
-- "Arctic resources go to U.S." → If perspective is "EU Commission": sentiment = "NEGATIVE" (EU loses access)
 
 **BEFORE assigning sentiment, ask: "Does this outcome HELP or HURT ${input.perspective}?"**
 - "positive" = HELPS ${input.perspective}'s interests, goals, security, prosperity
@@ -237,8 +238,13 @@ export function buildSecondOrderPrompt(
   const perspectiveText = input.perspective
     ? `
 
-## CRITICAL: PERSPECTIVE FOR SENTIMENT
-**ALL sentiment = from perspective of: ${input.perspective}**
+## CRITICAL: PERSPECTIVE — ${input.perspective}
+**This analysis is conducted FROM THE VIEWPOINT of: ${input.perspective}**
+
+### Content Framing
+Generate consequences that are RELEVANT and MATERIAL to "${input.perspective}". At least 70% should directly affect this stakeholder's operations, strategy, market position, or interests. Frame even broader consequences in terms of how they impact "${input.perspective}".
+
+### Sentiment Evaluation
 - "positive" = HELPS ${input.perspective}
 - "negative" = HURTS ${input.perspective}
 - Ask: "Does this help or hurt ${input.perspective}?" before assigning sentiment.`
@@ -270,18 +276,18 @@ Requirements:
 7. Include "importance": "critical", "high", "medium", or "low"
 
 Consider SPECIFICALLY:
-- NATO Article 5 implications and alliance dynamics
-- EU emergency meetings and responses
-- China and Russia's strategic calculations
-- UN Security Council proceedings
-- Global stock market sectors affected
-- Refugee and migration patterns
-- Arctic shipping and resource access
-- Military base realignments
-- Intelligence agency activities
-- Media narrative battles
-- Citizen protests and movements
-- Corporate relocations and investments
+- Supply chain and procurement impacts
+- Regulatory and compliance changes
+- Competitive dynamics and market positioning
+- Technology development and R&D pivots
+- Customer behavior and demand shifts
+- Investment flows and funding changes
+- Workforce and talent implications
+- Trade policy and geopolitical effects
+- Consumer sentiment and brand perception
+- Industry standards and certification changes
+- Cross-sector spillover effects
+- Regional market divergences
 
 Return ONLY a JSON array:
 [
@@ -313,11 +319,11 @@ export function buildThirdOrderPrompt(
   const perspectiveText = input.perspective
     ? `
 
-## CRITICAL: PERSPECTIVE FOR SENTIMENT
-**ALL sentiment = from perspective of: ${input.perspective}**
+## CRITICAL: PERSPECTIVE — ${input.perspective}
+**This analysis is conducted FROM THE VIEWPOINT of: ${input.perspective}**
+Generate consequences that are RELEVANT and MATERIAL to this stakeholder. Frame consequences in terms of how they affect "${input.perspective}" specifically.
 - "positive" = HELPS ${input.perspective}
-- "negative" = HURTS ${input.perspective}
-- Ask: "Does this help or hurt ${input.perspective}?" before assigning sentiment.`
+- "negative" = HURTS ${input.perspective}`
     : '';
 
   return `## Task: Generate Third-Order Consequences (Cascade Effects & Wildcards)
@@ -332,29 +338,29 @@ ${secondOrder}
 Generate **6-10 third-order consequences** representing structural changes AND wildcards:
 
 Include a MIX of:
-- **Institutional adaptations** (new treaties, reformed organizations)
-- **Economic restructuring** (new trade blocs, currency arrangements)
-- **Social movements** (new political parties, civil society responses)
-- **Technological pivots** (defense tech, surveillance, communication)
-- **Environmental policies** (governance, resource management)
+- **Market restructuring** (new value chains, industry consolidation, market creation/destruction)
+- **Regulatory shifts** (new standards, compliance regimes, trade barriers)
+- **Technological pivots** (R&D directions, emerging capabilities, platform shifts)
+- **Competitive dynamics** (new entrants, strategic alliances, business model changes)
+- **Societal/behavioral shifts** (consumer preferences, workforce changes, cultural attitudes)
 - **WILDCARDS** (1-3 surprising, counterintuitive, or black swan developments)
 
 Requirements:
 1. **CRITICAL: Each consequence MUST specify which second-order consequence (by number) it flows from using "parentIndex"**
-2. Systemic changes to institutions and power structures
-3. Shifts in alliance patterns and international order
-4. Emergent social/political movements
-5. Long-term economic restructuring
+2. Systemic changes to industry structures and value chains
+3. Shifts in competitive landscape and market dynamics
+4. Emerging business models and strategic pivots
+5. Long-term regulatory and standards evolution
 6. Technology development trajectories
 7. Include "importance": "critical", "high", "medium", or "low"
 8. Include 1-3 WILDCARDS with probability: "wildcard" - these are surprising, counterintuitive, or black swan possibilities
 
 Think about 1-10 year timeframe:
-- How does the international order reorganize?
-- What new institutions or agreements emerge?
-- How do economies adapt long-term?
-- What cultural/social shifts occur?
-- What technological races begin?
+- How does the industry restructure?
+- What new standards or regulations emerge?
+- How do supply chains and value chains reorganize?
+- What new business models or market categories appear?
+- What technological capabilities become critical?
 - What UNEXPECTED developments might occur? (wildcards)
 
 Return ONLY a JSON array:
@@ -570,7 +576,7 @@ export function buildChildConsequencesPrompt(
   const orderLabel = orderLabels[nextOrder] || 'downstream consequences';
 
   const perspectiveText = input.perspective
-    ? `\n**Evaluate ALL sentiment from the perspective of: ${input.perspective}**\n- "positive" = HELPS ${input.perspective}\n- "negative" = HURTS ${input.perspective}`
+    ? `\n**Perspective: ${input.perspective}** — Generate consequences that are relevant and material to this stakeholder. Frame consequences in terms of how they affect "${input.perspective}" specifically.\nEvaluate ALL sentiment from their viewpoint: "positive" = HELPS ${input.perspective}, "negative" = HURTS ${input.perspective}.`
     : '';
 
   const branchModeText = branchMode === 'deep'

@@ -14,7 +14,7 @@ import { useState, useCallback } from 'react';
 import { Box, Button, Text, Flex } from '@chakra-ui/react';
 import { Cloud, Check, AlertTriangle, Loader2 } from 'lucide-react';
 import { toPng } from 'html-to-image';
-import type { ReactFlowInstance } from 'reactflow';
+import type { ReactFlowInstance } from '@xyflow/react';
 import type { FutureInput, Consequence, Solution, ReportData } from '../types';
 import { saveFuturescape, type FuturescapeDataPayload } from '../api/persistence';
 import { buildReportHtmlString } from './reportHtmlExport';
@@ -68,7 +68,7 @@ export function SaveToCloudButton({
     }
   });
 
-  const captureMapThumbnail = useCallback(async (): Promise<Blob | null> => {
+  const captureMapThumbnail = useCallback(async (bgColor: string): Promise<Blob | null> => {
     const container = mapContainerRef.current;
     if (!container) return null;
 
@@ -78,8 +78,11 @@ export function SaveToCloudButton({
 
     try {
       const dataUrl = await toPng(viewport, {
-        backgroundColor: 'transparent',
+        backgroundColor: bgColor,
         pixelRatio: 2,
+        // Skip web font embedding — html-to-image crashes on certain
+        // CSS font rules where the `font` shorthand is undefined.
+        skipFonts: true,
         filter: (node) => {
           // Skip UI overlays like minimap, controls, attribution
           const el = node as HTMLElement;
@@ -113,18 +116,19 @@ export function SaveToCloudButton({
 
     try {
       // ── 1. Capture thumbnails in both modes ──
-      // Capture current mode first
+      const LIGHT_BG = '#FFFFFF';
+      const DARK_BG = '#111111';
       const isCurrentlyLight = colorMode === 'light';
-      const currentModeBlob = await captureMapThumbnail();
+      const currentModeBlob = await captureMapThumbnail(isCurrentlyLight ? LIGHT_BG : DARK_BG);
 
       // Switch to the other mode, capture, switch back
       toggleColorMode();
       // Give React + Chakra a moment to repaint
-      await new Promise(r => setTimeout(r, 500));
-      const otherModeBlob = await captureMapThumbnail();
+      await new Promise(r => setTimeout(r, 800));
+      const otherModeBlob = await captureMapThumbnail(isCurrentlyLight ? DARK_BG : LIGHT_BG);
       // Switch back
       toggleColorMode();
-      await new Promise(r => setTimeout(r, 200));
+      await new Promise(r => setTimeout(r, 300));
 
       const thumbnailLight = isCurrentlyLight ? currentModeBlob : otherModeBlob;
       const thumbnailDark = isCurrentlyLight ? otherModeBlob : currentModeBlob;
@@ -185,8 +189,8 @@ export function SaveToCloudButton({
 
   return (
     <Box>
-      {/* Auth token input (shown on first click if no token) */}
-      {showTokenInput && !authToken.trim() && (
+      {/* Auth token input (shown on first click if no token, or when editing) */}
+      {showTokenInput && (
         <Box mb={2} p={3} bg="bg.subtle" rounded="lg" borderWidth="1px" borderColor="border">
           <Text fontSize="xs" color="fg.muted" mb={1}>Admin auth token:</Text>
           <Flex gap={2}>
@@ -207,6 +211,7 @@ export function SaveToCloudButton({
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && authToken.trim()) {
                   try { localStorage.setItem('futurity_auth_token', authToken.trim()); } catch {}
+                  setShowTokenInput(false);
                   handleSave();
                 }
               }}
@@ -215,6 +220,7 @@ export function SaveToCloudButton({
               size="xs"
               onClick={() => {
                 try { localStorage.setItem('futurity_auth_token', authToken.trim()); } catch {}
+                setShowTokenInput(false);
                 handleSave();
               }}
               disabled={!authToken.trim()}
@@ -255,11 +261,32 @@ export function SaveToCloudButton({
         </Flex>
       </Button>
 
-      {/* Error message */}
-      {phase === 'error' && errorMessage && (
-        <Text fontSize="xs" color="red.400" mt={1}>
-          {errorMessage}
-        </Text>
+      {/* Error message + change token link */}
+      {phase === 'error' && (
+        <Flex direction="column" gap={1} mt={1}>
+          {errorMessage && (
+            <Text fontSize="xs" color="red.400">
+              {errorMessage}
+            </Text>
+          )}
+          <Text
+            as="button"
+            fontSize="xs"
+            color="fg.muted"
+            textDecoration="underline"
+            cursor="pointer"
+            _hover={{ color: 'fg' }}
+            onClick={() => {
+              setAuthToken('');
+              try { localStorage.removeItem('futurity_auth_token'); } catch {}
+              setShowTokenInput(true);
+              setPhase('idle');
+              setErrorMessage('');
+            }}
+          >
+            Change auth token
+          </Text>
+        </Flex>
       )}
     </Box>
   );

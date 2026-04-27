@@ -9,9 +9,11 @@
 import type { FutureInput, Consequence, Solution, ReportData } from '../types';
 
 // ── Backend URL ──────────────────────────────────────────────────
-// The Futurity backend URL. In production this comes from an env var;
-// in development it defaults to the dev API.
+// When running standalone, uses VITE_FUTURITY_API_URL.
+// When imported from the FAST app, falls back to VITE_API_URL.
+// Last resort: the dev API.
 const FUTURITY_API = import.meta.env.VITE_FUTURITY_API_URL
+  || import.meta.env.VITE_API_URL
   || 'https://api-dev.futurity.science';
 
 // ── Types ────────────────────────────────────────────────────────

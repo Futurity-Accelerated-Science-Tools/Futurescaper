@@ -1,5 +1,5 @@
 import React, { memo, useState, useEffect, useRef } from 'react';
-import { Handle, Position, NodeProps, useStore } from 'reactflow';
+import { Handle, Position, useStore, type NodeProps, type Node } from '@xyflow/react';
 import { Box, Flex, Text } from '@chakra-ui/react';
 import {
   Consequence,
@@ -721,8 +721,8 @@ export interface ConsequenceNodeData {
 // ─── ConsequenceNode ──────────────────────────────────────────────
 // Custom equality check: compare rendering-relevant data fields, ignore function references
 function consequenceNodeAreEqual(
-  prev: NodeProps<ConsequenceNodeData>,
-  next: NodeProps<ConsequenceNodeData>,
+  prev: NodeProps<Node<ConsequenceNodeData>>,
+  next: NodeProps<Node<ConsequenceNodeData>>,
 ): boolean {
   const p = prev.data;
   const n = next.data;
@@ -751,7 +751,7 @@ function consequenceNodeAreEqual(
 // Stable selector — avoids re-creating on every render
 const zoomSelector = (s: { transform: [number, number, number] }) => s.transform[2];
 
-export const ConsequenceNode = memo(({ data, draggable }: NodeProps<ConsequenceNodeData>) => {
+export const ConsequenceNode = memo(({ data, draggable }: NodeProps<Node<ConsequenceNodeData>>) => {
   const { colorMode } = useColorMode();
   const isDark = colorMode === 'dark';
   const zoom = useStore(zoomSelector);
@@ -859,10 +859,10 @@ export const ConsequenceNode = memo(({ data, draggable }: NodeProps<ConsequenceN
   // Normalized width — wide enough for 3 badges side-by-side
   const nodeWidth = 280;
 
-  // Theme-following styling: bg.canvas background, fg text — ideas keep brand blue
+  // Theme-following styling — use concrete colors so html-to-image can resolve them
   const IDEA_BRAND = '#0005e9';
-  const textColor = isSolutionOrIdea ? '#fff' : 'var(--chakra-colors-fg, #1B1B1D)';
-  const nodeBg = isSolutionOrIdea ? IDEA_BRAND : 'var(--chakra-colors-bg-canvas, #FFFFFF)';
+  const textColor = isSolutionOrIdea ? '#fff' : (isDark ? '#E8E8ED' : '#1B1B1D');
+  const nodeBg = isSolutionOrIdea ? IDEA_BRAND : (isDark ? '#1A1A1E' : '#FFFFFF');
 
   const isCritical = importance === 'critical';
   // 1px border that stays visually constant regardless of zoom level
@@ -919,7 +919,7 @@ export const ConsequenceNode = memo(({ data, draggable }: NodeProps<ConsequenceN
       className={`consequence-node ${isGenerating ? 'generating-pulse' : ''} ${isNewlyExpanded ? 'newly-expanded-glow' : ''} ${isFocusDimmed ? 'focus-dimmed' : ''}`}
       style={{
         backgroundColor: nodeBg,
-        borderColor: isNewlyExpanded ? '#d69e2e' : isSolutionOrIdea ? 'rgba(255,255,255,0.12)' : sentimentColors[consequence.sentiment] || 'var(--chakra-colors-border-muted, #e0e0e0)',
+        borderColor: isNewlyExpanded ? '#d69e2e' : isSolutionOrIdea ? 'rgba(255,255,255,0.12)' : sentimentColors[consequence.sentiment] || (isDark ? '#2D2D32' : '#e0e0e0'),
         borderWidth: `${borderWidth}px`,
         width: `${nodeWidth}px`,
         borderStyle: isUnattached ? 'dashed' : 'solid',
@@ -1205,7 +1205,7 @@ function SeedActionToolbar({
 // ─── SeedNode ─────────────────────────────────────────────────────
 const SEED_BRAND = '#0005e9';
 
-export const SeedNode = memo(({ data }: NodeProps<SeedNodeData>) => {
+export const SeedNode = memo(({ data }: NodeProps<Node<SeedNodeData>>) => {
   const { title, description, isSelected, isGeneratingChildren, isGenerationInProgress, isConnectValidTarget, isConnectMode, onClick, onAddChild, onGenerateChildren } = data;
 
   const seedShadow = isConnectValidTarget

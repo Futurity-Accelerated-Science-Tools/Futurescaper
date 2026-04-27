@@ -5,7 +5,7 @@ import { FuturescapeMap } from './components/FuturescapeMap';
 import { ReportPanel } from './components/ReportPanel';
 import { FuturescapeViewer } from './components/FuturescapeViewer';
 import { decodeGraphFromURL } from './shareCodec';
-import { Node, Edge } from 'reactflow';
+import type { Node, Edge } from '@xyflow/react';
 import './index.css';
 
 // Type for imported data
@@ -123,38 +123,22 @@ function MainApp() {
   );
 }
 
-// ── Viewer route ─────────────────────────────────────────────
-// Detects /#/view/{slug} in the URL hash and renders the read-only viewer.
+// ── Viewer slug detection ────────────────────────────────────
+// Supports both /view/{slug} (path-based) and /#/view/{slug} (hash-based).
 
-function ViewerApp() {
-  const [slug, setSlug] = useState<string | null>(null);
+function getViewerSlug(): string | null {
+  // 1. Check pathname: /view/{slug}
+  const pathMatch = window.location.pathname.match(/^\/view\/(.+)$/);
+  if (pathMatch) return decodeURIComponent(pathMatch[1]);
 
-  useEffect(() => {
-    function parseHash() {
-      const hash = window.location.hash;
-      const match = hash.match(/^#\/view\/(.+)$/);
-      setSlug(match ? decodeURIComponent(match[1]) : null);
-    }
+  // 2. Check hash: /#/view/{slug}
+  const hashMatch = window.location.hash.match(/^#\/view\/(.+)$/);
+  if (hashMatch) return decodeURIComponent(hashMatch[1]);
 
-    parseHash();
-    window.addEventListener('hashchange', parseHash);
-    return () => window.removeEventListener('hashchange', parseHash);
-  }, []);
-
-  if (!slug) return null;
-
-  return (
-    <FuturescapeViewer
-      slug={slug}
-      onBack={() => {
-        window.location.hash = '';
-      }}
-    />
-  );
+  return null;
 }
 
 // ── Root switch ───────────────────────────────────────────────
-// No hooks in App — just a static branch so React rules-of-hooks are satisfied.
 
 function App() {
   // 1. Report export mode (standalone HTML file)
@@ -162,12 +146,20 @@ function App() {
     return <ReportExportView />;
   }
 
-  // 2. Viewer mode (/#/view/{slug})
-  if (window.location.hash.startsWith('#/view/')) {
-    return <ViewerApp />;
+  // 2. Viewer mode (/view/{slug} or /#/view/{slug})
+  const viewerSlug = getViewerSlug();
+  if (viewerSlug) {
+    return (
+      <FuturescapeViewer
+        slug={viewerSlug}
+        onBack={() => {
+          window.location.href = '/';
+        }}
+      />
+    );
   }
 
-  // 3. Normal app
+  // 3. Normal app (creator)
   return <MainApp />;
 }
 

@@ -18,13 +18,60 @@ export function useColorMode() {
   return useContext(ColorModeContext);
 }
 
+interface ColorModeProviderProps {
+  children: ReactNode;
+  /**
+   * When provided, the provider delegates to an external color mode
+   * instead of managing its own state. Used when Futurescaper components
+   * are rendered inside the FAST app, which has its own theme context.
+   */
+  externalColorMode?: ColorMode;
+  externalToggle?: () => void;
+}
+
 /**
  * Manages the `data-theme` attribute on <html> which drives Chakra's
  * semantic token conditions (`_light` / `_dark`).
+ *
+ * When externalColorMode is provided (e.g. from FAST's useTheme()),
+ * this provider acts as a pass-through bridge rather than managing state.
  */
-export function ColorModeProvider({ children }: { children: ReactNode }) {
+export function ColorModeProvider({
+  children,
+  externalColorMode,
+  externalToggle,
+}: ColorModeProviderProps) {
+  // ── External mode (running inside FAST) ──────────────────────
+  if (externalColorMode !== undefined) {
+    const setColorMode = useCallback(
+      (mode: ColorMode) => {
+        // Only toggle if the requested mode differs from current
+        if (mode !== externalColorMode && externalToggle) {
+          externalToggle();
+        }
+      },
+      [externalColorMode, externalToggle]
+    );
+
+    return (
+      <ColorModeContext.Provider
+        value={{
+          colorMode: externalColorMode,
+          toggleColorMode: externalToggle || (() => {}),
+          setColorMode,
+        }}
+      >
+        {children}
+      </ColorModeContext.Provider>
+    );
+  }
+
+  // ── Standalone mode (running as independent Futurescaper app) ──
+  return <StandaloneColorModeProvider>{children}</StandaloneColorModeProvider>;
+}
+
+function StandaloneColorModeProvider({ children }: { children: ReactNode }) {
   const [colorMode, setColorModeState] = useState<ColorMode>(() => {
-    // Check localStorage, fall back to system preference
     const stored = localStorage.getItem('futurescaper-color-mode') as ColorMode | null;
     if (stored === 'light' || stored === 'dark') return stored;
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';

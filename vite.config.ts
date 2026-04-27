@@ -1,17 +1,17 @@
 import { defineConfig } from 'vite'
+import { resolve } from 'path'
 import react from '@vitejs/plugin-react'
 import { viteSingleFile } from 'vite-plugin-singlefile'
-import path from 'path'
 
 export default defineConfig({
   plugins: [react(), viteSingleFile()],
+  appType: 'spa',  // Ensures all routes fall back to index.html in dev
   resolve: {
     alias: {
-      // Force ALL packages (including @cosmograph/react which lives in the
-      // root node_modules) to use Futurescaper's React 19 — prevents the
-      // "Invalid hook call" crash from dual-React instances.
-      react: path.resolve(__dirname, 'node_modules/react'),
-      'react-dom': path.resolve(__dirname, 'node_modules/react-dom'),
+      // Force all libraries to share the app's single React instance.
+      // Prevents dual-React hooks crashes from deps that bundle their own.
+      react: resolve(__dirname, 'node_modules/react'),
+      'react-dom': resolve(__dirname, 'node_modules/react-dom'),
     },
   },
   server: {

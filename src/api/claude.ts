@@ -304,7 +304,7 @@ export async function expandNodeConsequences(
 
 ${input.description}
 
-${input.perspective ? `## PERSPECTIVE: ${input.perspective}\nAll sentiment ratings MUST be from this stakeholder's viewpoint.` : ''}
+${input.perspective ? `## PERSPECTIVE: ${input.perspective}\nAll consequences MUST be relevant and material to this stakeholder. Frame consequences in terms of how they affect "${input.perspective}" specifically.\nAll sentiment ratings MUST be from this stakeholder's viewpoint: "positive" = HELPS ${input.perspective}, "negative" = HURTS ${input.perspective}.` : ''}
 
 ## Your Task
 The user wants to explore MORE consequences that flow from this specific consequence:

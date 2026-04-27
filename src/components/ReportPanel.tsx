@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { Box, Flex, Text } from '@chakra-ui/react';
-import { Node, Edge } from 'reactflow';
+import type { Node, Edge } from '@xyflow/react';
 import {
   ArrowLeft,
   Clock,

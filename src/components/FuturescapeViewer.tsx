@@ -13,7 +13,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Box, Flex, Text, Button, Spinner } from '@chakra-ui/react';
 import { ArrowLeft, FileText, Map as MapIcon } from 'lucide-react';
-import { Node, Edge, MarkerType } from 'reactflow';
+import { MarkerType, type Node, type Edge } from '@xyflow/react';
 import { ReadOnlyMap } from './ReadOnlyMap';
 import { ReportPanel } from './ReportPanel';
 import { loadFuturescapeData, type FuturescapeDataPayload } from '../api/persistence';

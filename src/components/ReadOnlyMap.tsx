@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { Box } from '@chakra-ui/react';
-import ReactFlow, {
-  Node,
-  Edge,
+import {
+  ReactFlow,
   Background,
   Controls,
   BackgroundVariant,
   ReactFlowProvider,
   useReactFlow,
-  NodeMouseHandler,
-} from 'reactflow';
-import 'reactflow/dist/style.css';
+  type Node,
+  type Edge,
+  type NodeMouseHandler,
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
 import { ConsequenceNode, SeedNode } from './ConsequenceNode';
 import { useColorMode } from '../theme/ColorModeProvider';
 
