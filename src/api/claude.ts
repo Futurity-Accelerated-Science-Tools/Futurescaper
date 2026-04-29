@@ -1,8 +1,10 @@
 // API client for Futurescape - Multi-provider support
 
-import { Consequence, Solution, ConsequenceOrder, FutureInput, STEEPCategory } from '../types';
+import { Consequence, Solution, ConsequenceOrder, FutureInput, GenerationConfig, DEFAULT_GENERATION_CONFIG } from '../types';
+import { resolveGenerationParams } from './generationStrategy';
 import {
   SYSTEM_PROMPT,
+  buildSystemPrompt,
   buildFirstOrderPrompt,
   buildSecondOrderPrompt,
   buildThirdOrderPrompt,
@@ -10,6 +12,7 @@ import {
   buildChildConsequencesPrompt,
   parseConsequencesResponse,
   parseSolutionsResponse,
+  BranchMode,
 } from './prompts';
 import {
   callProviderAPI,
@@ -40,14 +43,18 @@ export async function callAPI(
 export async function generateConsequencesWithAI(
   input: FutureInput,
   order: ConsequenceOrder,
-  existingConsequences: Consequence[]
+  existingConsequences: Consequence[],
+  count?: number
 ): Promise<Consequence[]> {
   let prompt: string;
   let parentId: string;
 
+  // Gather existing siblings (same parent, same order) to avoid duplicates
+  const existingSiblingsForOrder = existingConsequences.filter(c => c.order === order);
+
   switch (order) {
     case 1:
-      prompt = buildFirstOrderPrompt(input);
+      prompt = buildFirstOrderPrompt(input, count, existingSiblingsForOrder);
       parentId = 'seed';
       break;
     case 2:
@@ -63,9 +70,10 @@ export async function generateConsequencesWithAI(
   }
 
   // Use higher token limit for generation calls - 3rd order especially needs room for 10-15 items
-  const response = await callAPI([{ role: 'user', content: prompt }], SYSTEM_PROMPT, 8192);
+  const systemPrompt = buildSystemPrompt(input.verbosity);
+  const response = await callAPI([{ role: 'user', content: prompt }], systemPrompt, 8192);
   const previousOrder = existingConsequences.filter(c => c.order === (order - 1) as ConsequenceOrder);
-  const consequences = parseConsequencesResponse(response, order, parentId, previousOrder);
+  let consequences = parseConsequencesResponse(response, order, parentId, previousOrder);
 
   return consequences;
 }
@@ -76,30 +84,56 @@ export async function generateSolutionsWithAI(
   consequences: Consequence[]
 ): Promise<Solution[]> {
   const prompt = buildSolutionsPrompt(input, consequences);
-  const response = await callAPI([{ role: 'user', content: prompt }], SYSTEM_PROMPT);
+  const systemPrompt = buildSystemPrompt(input.verbosity);
+  const response = await callAPI([{ role: 'user', content: prompt }], systemPrompt);
   return parseSolutionsResponse(response);
 }
 
 // Generate child consequences from a specific parent node (used by radial menu)
 export async function generateChildConsequencesWithAI(
   input: FutureInput,
-  parentConsequence: Consequence
+  parentConsequence: Consequence,
+  count: number = 3,
+  existingSiblings?: Consequence[],
+  branchMode: BranchMode = 'normal'
 ): Promise<Consequence[]> {
-  const prompt = buildChildConsequencesPrompt(input, parentConsequence);
-  const response = await callAPI([{ role: 'user', content: prompt }], SYSTEM_PROMPT);
+  const prompt = buildChildConsequencesPrompt(input, parentConsequence, count, existingSiblings, branchMode);
+  const systemPrompt = buildSystemPrompt(input.verbosity);
+  const response = await callAPI([{ role: 'user', content: prompt }], systemPrompt);
   const newOrder = Math.min(parentConsequence.order + 1, 5) as ConsequenceOrder;
-  return parseConsequencesResponse(response, newOrder, parentConsequence.id);
+  const results = parseConsequencesResponse(response, newOrder, parentConsequence.id);
+  return results;
 }
 
-// Phase type for callbacks (reduced to 3 orders)
+// Phase type for callbacks
 export type GenerationPhase =
   | 'analyzing'
   | 'first-order'
   | 'second-order'
   | 'third-order'
+  | 'fourth-order'
+  | 'fifth-order'
   | 'solutions';
 
+// Helper: run async tasks in parallel batches to avoid overwhelming the API
+async function runInBatches<T>(
+  tasks: (() => Promise<T>)[],
+  batchSize: number = 3
+): Promise<T[]> {
+  const results: T[] = [];
+  for (let i = 0; i < tasks.length; i += batchSize) {
+    const batch = tasks.slice(i, i + batchSize);
+    const batchResults = await Promise.allSettled(batch.map(fn => fn()));
+    for (const r of batchResults) {
+      if (r.status === 'fulfilled') results.push(r.value);
+      else console.error('Batch task failed:', r.reason);
+    }
+  }
+  return results;
+}
+
 // Full comprehensive generation flow with callbacks
+// Driven by GenerationConfig → ResolvedGenerationParams
 export async function generateComprehensiveFuturescape(
   input: FutureInput,
   callbacks: {
@@ -107,108 +141,149 @@ export async function generateComprehensiveFuturescape(
     onPhaseComplete: (phase: GenerationPhase, consequences: Consequence[], solutions?: Solution[]) => void;
     onProgress: (message: string) => void;
     onError: (error: Error, phase: string) => void;
-  }
+  },
+  config: GenerationConfig = DEFAULT_GENERATION_CONFIG,
 ): Promise<{ consequences: Consequence[]; solutions: Solution[] }> {
+  const params = resolveGenerationParams(config, input.verbosity);
   let allConsequences: Consequence[] = [];
+  const importanceScore = (c: Consequence) => ({ critical: 0, high: 1, medium: 2, low: 3 }[c.importance || 'medium']);
 
   try {
-    // First order - Direct consequences
+    // ── Phase 1: First-order consequences ──
     callbacks.onPhaseStart('first-order');
-    callbacks.onProgress('Identifying direct, first-order consequences...');
-    const firstOrder = await generateConsequencesWithAI(input, 1, []);
+    callbacks.onProgress(`Identifying ${params.firstOrderCount} direct, first-order consequences...`);
+    const firstOrder = await generateConsequencesWithAI(input, 1, [], params.firstOrderCount);
     allConsequences = [...firstOrder];
     callbacks.onPhaseComplete('first-order', firstOrder);
     callbacks.onProgress(`Found ${firstOrder.length} first-order consequences`);
 
-    // Second order - Ripple effects
+    // ── Phase 2: Second-order branching ──
     callbacks.onPhaseStart('second-order');
-    callbacks.onProgress('Analyzing second-order ripple effects...');
-    const secondOrder = await generateConsequencesWithAI(input, 2, allConsequences);
-    allConsequences = [...allConsequences, ...secondOrder];
-    callbacks.onPhaseComplete('second-order', secondOrder);
-    callbacks.onProgress(`Found ${secondOrder.length} second-order consequences`);
+    const { mode, deepChildCount, priorityCount, lightChildCount } = params.secondOrder;
 
-    // Third order - Cascade effects (final order - includes some wildcards)
-    callbacks.onPhaseStart('third-order');
-    callbacks.onProgress('Exploring third-order cascade effects and wildcards...');
-    const thirdOrder = await generateConsequencesWithAI(input, 3, allConsequences);
-    allConsequences = [...allConsequences, ...thirdOrder];
-    callbacks.onPhaseComplete('third-order', thirdOrder);
-    callbacks.onProgress(`Found ${thirdOrder.length} third-order consequences`);
+    if (mode === 'priority') {
+      callbacks.onProgress('Prioritizing branches for asymmetric exploration...');
+      const sortedFirst = [...firstOrder].sort((a, b) => importanceScore(a) - importanceScore(b));
+      const priorityIds = new Set(sortedFirst.slice(0, priorityCount ?? 2).map(c => c.id));
 
-    // Solutions & Ideas phase - generate graph-connected nodes for key consequences
-    callbacks.onPhaseStart('solutions');
-    callbacks.onProgress('Generating solutions & ideas for key consequences...');
-
-    // Pick consequences to generate solutions/ideas for
-    // KEY: Spread evenly across STEEPE categories, different parent chains, and all orders
-    const candidateConsequences = allConsequences
-      .filter(c => c.importance === 'critical' || c.importance === 'high' || c.importance === 'medium')
-      .sort((a, b) => {
-        const importanceScore = (c: Consequence) => ({ critical: 0, high: 1, medium: 2, low: 3 }[c.importance || 'medium']);
-        return importanceScore(a) - importanceScore(b);
+      const secondOrderTasks = firstOrder.map(parent => async () => {
+        const isPriority = priorityIds.has(parent.id);
+        const count = isPriority ? deepChildCount : (lightChildCount ?? 0);
+        if (count === 0) return [] as Consequence[];
+        const branchMode: BranchMode = isPriority ? 'deep' : 'light';
+        callbacks.onProgress(
+          isPriority
+            ? `Deep dive: "${parent.text.slice(0, 40)}..." → ${count} ripple effects`
+            : `Light touch: "${parent.text.slice(0, 40)}..." → ${count} effect`
+        );
+        const children = await generateChildConsequencesWithAI(input, parent, count, undefined, branchMode);
+        callbacks.onPhaseComplete('second-order', children);
+        return children;
       });
 
-    // Round-robin across categories to ensure spatial distribution around the map
-    const categories: STEEPCategory[] = ['social', 'technological', 'economic', 'environmental', 'political', 'ethical'];
-    const byCategory: Record<string, Consequence[]> = {};
-    for (const cat of categories) {
-      byCategory[cat] = candidateConsequences.filter(c => c.category === cat);
+      const secondOrderBatches = await runInBatches(secondOrderTasks, 3);
+      const secondOrder = secondOrderBatches.flat();
+      allConsequences = [...allConsequences, ...secondOrder];
+      callbacks.onProgress(`Found ${secondOrder.length} second-order consequences`);
+    } else {
+      // Uniform mode — every first-order node gets the same count
+      callbacks.onProgress(`Generating ${deepChildCount} children per first-order node...`);
+      const secondOrderTasks = firstOrder.map(parent => async () => {
+        callbacks.onProgress(`Exploring "${parent.text.slice(0, 40)}..." → ${deepChildCount} effects`);
+        const children = await generateChildConsequencesWithAI(input, parent, deepChildCount, undefined, 'normal');
+        callbacks.onPhaseComplete('second-order', children);
+        return children;
+      });
+
+      const secondOrderBatches = await runInBatches(secondOrderTasks, 3);
+      const secondOrder = secondOrderBatches.flat();
+      allConsequences = [...allConsequences, ...secondOrder];
+      callbacks.onProgress(`Found ${secondOrder.length} second-order consequences`);
     }
 
-    const usedParentIds = new Set<string>();
-    const usedNodeIds = new Set<string>();
-    const keyConsequences: Consequence[] = [];
+    // ── Phase 3: Third-order ──
+    if (params.thirdOrder.expandCount > 0 && params.thirdOrder.childrenPer > 0) {
+      callbacks.onPhaseStart('third-order');
+      callbacks.onProgress('Exploring third-order cascade effects...');
+      const secondOrderNodes = allConsequences.filter(c => c.order === 2);
+      const sortedSecond = [...secondOrderNodes].sort((a, b) => importanceScore(a) - importanceScore(b));
+      const toExpand = sortedSecond.slice(0, params.thirdOrder.expandCount);
 
-    // Round-robin: pick one from each category that has candidates, repeat until we have 8
-    let passes = 0;
-    while (keyConsequences.length < 8 && passes < 5) {
-      for (const cat of categories) {
-        if (keyConsequences.length >= 8) break;
-        const pick = byCategory[cat]?.find(c =>
-          !usedNodeIds.has(c.id) &&
-          !usedParentIds.has(c.parentId || '') &&
-          !usedParentIds.has(c.id)
-        );
-        if (pick) {
-          keyConsequences.push(pick);
-          usedParentIds.add(pick.parentId || pick.id);
-          usedNodeIds.add(pick.id);
-        }
-      }
-      passes++;
-      // After first pass, relax the parent constraint so we can fill remaining slots
-      if (passes === 1) usedParentIds.clear();
+      const thirdOrderTasks = toExpand.map(parent => async () => {
+        callbacks.onProgress(`Cascading "${parent.text.slice(0, 40)}..." → ${params.thirdOrder.childrenPer} effects`);
+        const children = await generateChildConsequencesWithAI(input, parent, params.thirdOrder.childrenPer, undefined, 'deep');
+        callbacks.onPhaseComplete('third-order', children);
+        return children;
+      });
+
+      const thirdOrderBatches = await runInBatches(thirdOrderTasks, 3);
+      const thirdOrder = thirdOrderBatches.flat();
+      allConsequences = [...allConsequences, ...thirdOrder];
+      callbacks.onProgress(`Found ${thirdOrder.length} third-order consequences`);
     }
 
-    // Fallback: if still under 5, just grab whatever's left
-    if (keyConsequences.length < 5) {
-      for (const c of candidateConsequences) {
-        if (keyConsequences.length >= 5) break;
-        if (!usedNodeIds.has(c.id)) {
-          keyConsequences.push(c);
-          usedNodeIds.add(c.id);
-        }
-      }
+    // ── Phase 4: Fourth-order (depth-first strategies) ──
+    if (params.fourthOrder && params.fourthOrder.expandCount > 0 && params.fourthOrder.childrenPer > 0) {
+      callbacks.onPhaseStart('fourth-order');
+      callbacks.onProgress('Exploring fourth-order systemic effects...');
+      const thirdOrderNodes = allConsequences.filter(c => c.order === 3);
+      const sortedThird = [...thirdOrderNodes].sort((a, b) => importanceScore(a) - importanceScore(b));
+      const toExpand = sortedThird.slice(0, params.fourthOrder.expandCount);
+
+      const fourthOrderTasks = toExpand.map(parent => async () => {
+        callbacks.onProgress(`Deep cascade "${parent.text.slice(0, 40)}..." → ${params.fourthOrder!.childrenPer} effects`);
+        const children = await generateChildConsequencesWithAI(input, parent, params.fourthOrder!.childrenPer, undefined, 'deep');
+        callbacks.onPhaseComplete('fourth-order', children);
+        return children;
+      });
+
+      const fourthOrderBatches = await runInBatches(fourthOrderTasks, 3);
+      const fourthOrder = fourthOrderBatches.flat();
+      allConsequences = [...allConsequences, ...fourthOrder];
+      callbacks.onProgress(`Found ${fourthOrder.length} fourth-order consequences`);
     }
 
-    let allSolutionIdeas: Consequence[] = [];
-    for (let i = 0; i < keyConsequences.length; i++) {
-      const node = keyConsequences[i];
-      callbacks.onProgress(`Generating solutions/ideas (${i + 1}/${keyConsequences.length}): "${node.text.slice(0, 50)}..."`);
-      try {
-        const ideas = await generateSolutionIdeas(input, node, [...allConsequences, ...allSolutionIdeas]);
-        allSolutionIdeas = [...allSolutionIdeas, ...ideas];
-        // Add to consequences in real time so they appear on the graph progressively
-        callbacks.onPhaseComplete('solutions', ideas);
-      } catch (err) {
-        console.error(`Failed to generate solutions for node ${node.id}:`, err);
-        // Continue with other nodes even if one fails
-      }
+    // ── Phase 5: Fifth-order (deep depth-first only) ──
+    if (params.fifthOrder && params.fifthOrder.expandCount > 0 && params.fifthOrder.childrenPer > 0) {
+      callbacks.onPhaseStart('fifth-order');
+      callbacks.onProgress('Exploring fifth-order wildcard effects...');
+      const fourthOrderNodes = allConsequences.filter(c => c.order === 4);
+      const sortedFourth = [...fourthOrderNodes].sort((a, b) => importanceScore(a) - importanceScore(b));
+      const toExpand = sortedFourth.slice(0, params.fifthOrder.expandCount);
+
+      const fifthOrderTasks = toExpand.map(parent => async () => {
+        callbacks.onProgress(`Wildcard cascade "${parent.text.slice(0, 40)}..." → ${params.fifthOrder!.childrenPer} effects`);
+        const children = await generateChildConsequencesWithAI(input, parent, params.fifthOrder!.childrenPer, undefined, 'deep');
+        callbacks.onPhaseComplete('fifth-order', children);
+        return children;
+      });
+
+      const fifthOrderBatches = await runInBatches(fifthOrderTasks, 3);
+      const fifthOrder = fifthOrderBatches.flat();
+      allConsequences = [...allConsequences, ...fifthOrder];
+      callbacks.onProgress(`Found ${fifthOrder.length} fifth-order consequences`);
     }
 
-    callbacks.onProgress(`Generated ${allSolutionIdeas.length} solutions & ideas on the map`);
+    // ── Ideas phase: most important leaf nodes get ideas ──
+    callbacks.onPhaseStart('solutions');
+    callbacks.onProgress('Generating ideas & solutions for key consequences...');
+
+    const childParentIds = new Set(allConsequences.flatMap(c => c.parentIds).filter(Boolean));
+    const leafNodes = allConsequences.filter(c => !childParentIds.has(c.id) && c.order >= 2);
+    const sortedLeaves = [...leafNodes].sort((a, b) => importanceScore(a) - importanceScore(b));
+    const keyConsequences = sortedLeaves.slice(0, params.ideas.leafCount);
+
+    const ideaTasks = keyConsequences.map((node, i) => async () => {
+      callbacks.onProgress(`Ideas (${i + 1}/${keyConsequences.length}): "${node.text.slice(0, 40)}..."`);
+      const ideas = await generateSolutionIdeas(input, node, allConsequences, params.ideas.ideasPer);
+      callbacks.onPhaseComplete('solutions', ideas);
+      return ideas;
+    });
+
+    const ideaBatches = await runInBatches(ideaTasks, 3);
+    const allSolutionIdeas = ideaBatches.flat();
     allConsequences = [...allConsequences, ...allSolutionIdeas];
+    callbacks.onProgress(`Generated ${allSolutionIdeas.length} solutions & ideas`);
 
     return { consequences: allConsequences, solutions: [] };
   } catch (error) {
@@ -229,7 +304,7 @@ export async function expandNodeConsequences(
 
 ${input.description}
 
-${input.perspective ? `## PERSPECTIVE: ${input.perspective}\nAll sentiment ratings MUST be from this stakeholder's viewpoint.` : ''}
+${input.perspective ? `## PERSPECTIVE: ${input.perspective}\nAll consequences MUST be relevant and material to this stakeholder. Frame consequences in terms of how they affect "${input.perspective}" specifically.\nAll sentiment ratings MUST be from this stakeholder's viewpoint: "positive" = HELPS ${input.perspective}, "negative" = HURTS ${input.perspective}.` : ''}
 
 ## Your Task
 The user wants to explore MORE consequences that flow from this specific consequence:
@@ -260,7 +335,7 @@ Return a JSON array with 3-4 consequences:
 ]
 \`\`\``;
 
-  const response = await callAPI([{ role: 'user', content: prompt }], SYSTEM_PROMPT);
+  const response = await callAPI([{ role: 'user', content: prompt }], buildSystemPrompt(input.verbosity));
 
   // Parse the response
   try {
@@ -278,7 +353,7 @@ Return a JSON array with 3-4 consequences:
       category: item.category || 'social',
       sentiment: item.sentiment || 'neutral',
       order: newOrder,
-      parentId: nodeToExpand.id,
+      parentIds: [nodeToExpand.id],
       probability: item.probability || 'plausible',
       importance: item.importance || 'medium',
       timeFrame: item.timeFrame,
@@ -293,7 +368,8 @@ Return a JSON array with 3-4 consequences:
 export async function generateSolutionIdeas(
   input: FutureInput,
   targetNode: Consequence,
-  existingConsequences: Consequence[]
+  existingConsequences: Consequence[],
+  count: number = 2
 ): Promise<Consequence[]> {
   const sentimentContext = targetNode.sentiment === 'negative'
     ? `This is a NEGATIVE consequence (a risk/threat). Generate practical SOLUTIONS - preemptive actions, mitigations, or strategies that address this risk BEFORE it becomes a crisis. Think like a risk strategist finding ways to neutralize the threat or turn it into an advantage.`
@@ -320,7 +396,7 @@ Given this consequence from the futures analysis:
 
 ${sentimentContext}
 
-Generate exactly 2 actionable solutions or ideas that DIRECTLY FLOW FROM this specific consequence.${input.perspective ? ` Remember: at least 1 of the 2 must be specifically relevant and actionable for "${input.perspective}".` : ''}
+Generate exactly ${count} actionable solutions or ideas that DIRECTLY FLOW FROM this specific consequence.${input.perspective ? ` Remember: at least 1 of the ${count} must be specifically relevant and actionable for "${input.perspective}".` : ''}
 
 ## KEY PRINCIPLE
 Each solution/idea must have a clear causal link to the consequence:
@@ -329,9 +405,9 @@ Each solution/idea must have a clear causal link to the consequence:
 - The connection should be obvious and direct, not tangential
 
 ## CRITICAL: MIX OF RADICAL AND CONSERVATIVE
-You MUST provide a deliberate mix in these 2 items:
-- 1 should be RADICAL and highly creative - the kind of thing that sounds wild but is logically sound. Think "moralgorithm", "digital funerals", "autonomous dining experiences". Push boundaries. Be provocative. This should make someone pause and say "wait, that's actually brilliant."
-- 1 should be CONSERVATIVE and immediately feasible - practical, realistic, implementable within existing systems. Think policy changes, business pivots, training programs. Something a board would greenlight tomorrow.
+You MUST provide a deliberate mix in these ${count} items:
+- At least 1 should be RADICAL and highly creative - the kind of thing that sounds wild but is logically sound. Think "moralgorithm", "digital funerals", "autonomous dining experiences". Push boundaries. Be provocative. This should make someone pause and say "wait, that's actually brilliant."
+- At least 1 should be CONSERVATIVE and immediately feasible - practical, realistic, implementable within existing systems. Think policy changes, business pivots, training programs. Something a board would greenlight tomorrow.
 
 For example:
 - Consequence: "Autonomous vehicles eliminate need for human drivers"
@@ -360,7 +436,7 @@ Return a JSON array:
 
 IMPORTANT: The "title" must be a short, memorable name (2-5 words) that captures the essence of the idea. Think brand names, campaign slogans, or concept labels. NOT a full sentence.`;
 
-  const response = await callAPI([{ role: 'user', content: prompt }], SYSTEM_PROMPT);
+  const response = await callAPI([{ role: 'user', content: prompt }], buildSystemPrompt(input.verbosity));
 
   try {
     const jsonMatch = response.match(/```json\s*([\s\S]*?)```/) || response.match(/\[[\s\S]*\]/);
@@ -378,7 +454,7 @@ IMPORTANT: The "title" must be a short, memorable name (2-5 words) that captures
       category: item.category || targetNode.category,
       sentiment: 'positive' as const, // solutions/ideas are inherently positive action
       order: Math.min(targetNode.order + 1, 5) as ConsequenceOrder, // one ring out from parent so layout groups them correctly
-      parentId: targetNode.id,
+      parentIds: [targetNode.id],
       probability: 'plausible' as const,
       importance: item.importance || 'medium',
       timeFrame: item.timeFrame,
@@ -458,7 +534,7 @@ Return ONLY a JSON array:
 \`\`\``;
 
   onProgress?.('Interpreting your request...');
-  const response = await callAPI([{ role: 'user', content: prompt }], SYSTEM_PROMPT, 8192);
+  const response = await callAPI([{ role: 'user', content: prompt }], buildSystemPrompt(input.verbosity), 8192);
   onProgress?.('Parsing new consequences...');
 
   try {
@@ -491,7 +567,7 @@ Return ONLY a JSON array:
         category: item.category || 'social',
         sentiment: item.sentiment || 'neutral',
         order,
-        parentId,
+        parentIds: [parentId],
         probability: item.probability || 'plausible',
         importance: item.importance || 'medium',
         timeFrame: item.timeFrame || 'short-term',

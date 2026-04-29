@@ -1,22 +1,40 @@
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-:root {
-  --positive: #0a6847;
-  --negative: #a4133c;
-  --neutral: #3c2f80;
-  --seed: #7c5cfc;
-  --bg-dark: #1a1a2e;
-  --bg-card: #ffffff;
-  --bg-light: #fafafa;
-  --text-primary: #1a1a2e;
-  --text-secondary: #4a5568;
-  --border-subtle: #e2e8f0;
-  --accent-gradient: linear-gradient(90deg, #7c5cfc 0%, #00d4aa 50%, #e91e8c 100%);
+/* TT Norms Pro — local @font-face for reliable font-family name matching */
+@font-face {
+  font-family: 'TT Norms Pro Normal';
+  src: url('./assets/TT_Norms_Pro_Normal.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
 }
+@font-face {
+  font-family: 'TT Norms Pro Compact';
+  src: url('./assets/TT_Norms_Pro_Compact_Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Inverted-node overlay variables
+   Nodes use fg as bg → overlays must flip per mode.
+   Light mode: nodes are dark → white overlays (255,255,255)
+   Dark mode:  nodes are light → dark overlays (0,0,0)
+   ═══════════════════════════════════════════════════════════ */
+
+[data-theme="light"], .light {
+  --node-overlay: 255,255,255;
+  --node-overlay-inv: 0,0,0;
+}
+[data-theme="dark"], .dark {
+  --node-overlay: 0,0,0;
+  --node-overlay-inv: 255,255,255;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Base resets
+   ═══════════════════════════════════════════════════════════ */
 
 * {
   box-sizing: border-box;
@@ -24,7 +42,6 @@
 
 body {
   font-family: 'JetBrains Mono', monospace;
-  background: var(--bg-light);
   margin: 0;
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
@@ -35,18 +52,10 @@ body {
   min-height: 100vh;
 }
 
-/* Modern input styling */
 input, textarea, select {
   font-family: inherit;
 }
 
-input:focus, textarea:focus, select:focus {
-  outline: none;
-  border-color: var(--seed) !important;
-  box-shadow: 0 0 0 3px rgba(43, 108, 176, 0.15);
-}
-
-/* Modern button styling */
 button {
   font-family: inherit;
   cursor: pointer;
@@ -68,15 +77,18 @@ button:active {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #d1d5db;
+  background: var(--chakra-colors-border-muted, #d1d5db);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #9ca3af;
+  background: var(--chakra-colors-fg-muted, #9ca3af);
 }
 
-/* React Flow nodes */
+/* ═══════════════════════════════════════════════════════════
+   ReactFlow overrides — these MUST stay in CSS
+   ═══════════════════════════════════════════════════════════ */
+
 .react-flow__node {
   cursor: pointer;
 }
@@ -88,6 +100,15 @@ button:active {
   height: 8px !important;
   min-width: 8px !important;
   min-height: 8px !important;
+  background: #94a3b8 !important;
+}
+
+/* Seed node handles slightly larger */
+.react-flow__handle.seed-handle {
+  width: 12px !important;
+  height: 12px !important;
+  min-width: 12px !important;
+  min-height: 12px !important;
 }
 
 .react-flow__node:hover .react-flow__handle {
@@ -95,19 +116,95 @@ button:active {
 }
 
 .react-flow__edge-path {
-  stroke-width: 2;
+  stroke-width: 1.5;
+  transition: stroke-width 0.2s ease, opacity 0.2s ease;
 }
+
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke-width: 2px !important;
+  opacity: 0.7 !important;
+}
+
+.react-flow__edge .react-flow__arrowhead {
+  fill: currentColor;
+}
+
+.react-flow__edge.animated .react-flow__edge-path {
+  stroke-dasharray: 5;
+  animation: dash 0.5s linear infinite;
+}
+
+@keyframes dash {
+  to { stroke-dashoffset: -10; }
+}
+
+.react-flow__attribution {
+  display: none;
+}
+
+/* Controls theme-awareness */
+.react-flow__controls {
+  background: var(--chakra-colors-bg-canvas, #fff) !important;
+  border: 1px solid var(--chakra-colors-border-muted, #e0e0e0) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1) !important;
+}
+.react-flow__controls-button {
+  background: var(--chakra-colors-bg-canvas, #fff) !important;
+  border-color: var(--chakra-colors-border-muted, #e0e0e0) !important;
+  fill: var(--chakra-colors-fg-muted, #666) !important;
+}
+.react-flow__controls-button:hover {
+  background: var(--chakra-colors-bg-hover, #f5f5f5) !important;
+}
+
+/* MiniMap theme-awareness */
+.react-flow__minimap {
+  background: var(--chakra-colors-bg-canvas, #fff) !important;
+  border: 1px solid var(--chakra-colors-border-muted, #e0e0e0) !important;
+  border-radius: 8px !important;
+}
+
+/* Default: nodes render above edges */
+.react-flow__edges {
+  z-index: 0 !important;
+}
+.react-flow__nodes {
+  z-index: 1 !important;
+}
+
+/* During focus-path: edges above default node layer, but the nodes container
+   uses z-index:auto so it does NOT create a stacking context. This lets
+   individual nodes (with their own z-index) participate in the viewport's
+   stacking order. */
+.has-focus-path .react-flow__edges {
+  z-index: 2 !important;
+}
+.has-focus-path .react-flow__nodes {
+  z-index: auto !important;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Consequence node base styles — CSS needed for ReactFlow stacking
+   ═══════════════════════════════════════════════════════════ */
 
 .consequence-node {
   transition: box-shadow 0.2s ease;
-  /* backdrop-filter removed — caused blur artifacts with ReactFlow transforms */
 }
 
 .consequence-node:hover {
-  box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
 }
 
-/* Focus-path animation: smooth position transitions during focus/unfocus */
+/* Prevent hover scale when toolbar is showing */
+.consequence-node:has(.node-action-toolbar) {
+  transform: none !important;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Focus-path animation classes
+   ═══════════════════════════════════════════════════════════ */
+
 .focus-animating .react-flow__node {
   transition: transform 400ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
@@ -129,6 +226,10 @@ button:active {
 .consequence-node:not(.focus-dimmed) > *:not(.react-flow__handle) {
   transition: opacity 300ms ease;
 }
+
+/* ═══════════════════════════════════════════════════════════
+   Node animations — CSS keyframes for ReactFlow canvas
+   ═══════════════════════════════════════════════════════════ */
 
 @keyframes pulse-ring {
   0% { transform: scale(0.95); opacity: 1; }
@@ -163,147 +264,7 @@ button:active {
   animation: fadeInUp 0.3s ease-out forwards;
 }
 
-.steep-badge {
-  font-size: 0.65rem;
-  padding: 3px 8px;
-  border-radius: 4px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-/* React Flow overrides */
-.react-flow__attribution {
-  display: none;
-}
-
-.react-flow__edge-path {
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  transition: stroke-width 0.2s ease, opacity 0.2s ease;
-}
-
-.react-flow__edge:hover .react-flow__edge-path {
-  stroke-width: 3px !important;
-  opacity: 1 !important;
-  filter: drop-shadow(0 0 3px currentColor);
-}
-
-.react-flow__edge.smoothstep .react-flow__edge-path {
-  stroke-linecap: round;
-}
-
-.react-flow__edge .react-flow__arrowhead {
-  fill: currentColor;
-}
-
-.react-flow__edge.animated .react-flow__edge-path {
-  stroke-dasharray: 5;
-  animation: dash 0.5s linear infinite;
-}
-
-@keyframes dash {
-  to { stroke-dashoffset: -10; }
-}
-
-/* Default: nodes render above edges */
-.react-flow__edges {
-  z-index: 0 !important;
-}
-.react-flow__nodes {
-  z-index: 1 !important;
-}
-
-/* During focus-path: edges above default node layer, but the nodes container
-   uses z-index:auto so it does NOT create a stacking context. This lets
-   individual nodes (with their own z-index) participate in the viewport's
-   stacking order:
-   - Selected node (z-index:1001) renders ABOVE edges (z-index:2)
-   - Chain ancestor nodes (z-index:1000) render ABOVE edges
-   - Non-chain nodes (no z-index) render BELOW edges */
-.has-focus-path .react-flow__edges {
-  z-index: 2 !important;
-}
-.has-focus-path .react-flow__nodes {
-  z-index: auto !important;
-}
-
-/* Gradient bar like in reference image */
-.gradient-bar {
-  height: 4px;
-  background: var(--accent-gradient);
-  border-radius: 2px;
-}
-
-/* Modern card styling */
-.modern-card {
-  background: white;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
-  transition: all 0.2s ease;
-}
-
-.modern-card:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
-  border-color: #d1d5db;
-}
-
-/* Stats display */
-.stat-value {
-  font-weight: 600;
-}
-
-/* Pill buttons */
-.pill-button {
-  padding: 6px 14px;
-  border-radius: 50px;
-  font-size: 0.8rem;
-  font-weight: 500;
-  border: 1px solid #e5e7eb;
-  background: white;
-  color: #374151;
-  transition: all 0.15s ease;
-}
-
-.pill-button:hover {
-  background: var(--seed);
-  border-color: var(--seed);
-  color: white;
-}
-
-/* Progress bar with gradient */
-.progress-bar-gradient {
-  height: 6px;
-  background: #e5e7eb;
-  border-radius: 3px;
-  overflow: hidden;
-}
-
-.progress-bar-gradient .progress-fill {
-  height: 100%;
-  background: var(--accent-gradient);
-  transition: width 0.5s ease;
-}
-
-/* Detail panel */
-.detail-panel {
-  background: white;
-  border-radius: 16px;
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.1);
-}
-
-/* API key success state */
-.api-success {
-  background: linear-gradient(90deg, rgba(34, 197, 94, 0.08) 0%, rgba(34, 197, 94, 0.02) 100%);
-  border-color: #22c55e !important;
-}
-
-.react-flow__background {
-  background: #ffffff !important;
-}
-
-/* --- Action toolbar animation --- */
+/* Action toolbar slide-in */
 @keyframes toolbarSlideIn {
   0% {
     transform: translateX(-50%) translateY(-4px);
@@ -340,12 +301,18 @@ button:active {
   opacity: 0;
 }
 
-/* Prevent hover scale when toolbar is showing */
-.consequence-node:has(.node-action-toolbar) {
-  transform: none !important;
+/* Action button tooltip on hover */
+.action-btn-hoverable:hover .action-btn-tooltip {
+  opacity: 1 !important;
 }
 
-/* --- Node hover expansion --- */
+/* Share link disabled tooltip on hover */
+.share-link-wrapper:hover .share-link-tooltip {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+
+/* Node hover expansion */
 @keyframes nodeExpand {
   from { opacity: 0; max-height: 0; }
   to { opacity: 1; max-height: 200px; }
@@ -354,4 +321,26 @@ button:active {
 .node-expanded-meta {
   animation: nodeExpand 0.25s ease-out forwards;
   overflow: hidden;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Utility animations (replacing Tailwind animate-* classes)
+   ═══════════════════════════════════════════════════════════ */
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.animate-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }

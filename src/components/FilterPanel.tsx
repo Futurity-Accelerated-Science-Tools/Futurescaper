@@ -1,6 +1,9 @@
 import React from 'react';
-import { STEEPCategory, Sentiment, ConsequenceOrder, STEEP_LABELS, STEEP_COLORS, ORDER_LABELS } from '../types';
-import { TrendingUp, TrendingDown, Minus, Filter } from 'lucide-react';
+import { Box, Flex, Text } from '@chakra-ui/react';
+import { STEEPCategory, Sentiment, ConsequenceOrder, STEEP_LABELS, SENTIMENT_SYMBOLS, ORDER_LABELS } from '../types';
+import { Filter } from 'lucide-react';
+import { SteepIcon, getSteepMutedBg, getSteepTextColor } from './SteepIcon';
+import { useColorMode } from '../theme/ColorModeProvider';
 
 interface FilterPanelProps {
   categories: STEEPCategory[];
@@ -19,14 +22,16 @@ export function FilterPanel({
   onToggleSentiment,
   onToggleOrder,
 }: FilterPanelProps) {
+  const { colorMode } = useColorMode();
+  const isDark = colorMode === 'dark';
   const allCategories: STEEPCategory[] = ['social', 'technological', 'economic', 'environmental', 'political', 'ethical'];
   const allSentiments: Sentiment[] = ['positive', 'negative', 'neutral'];
   const allOrders: ConsequenceOrder[] = [1, 2, 3];
 
-  const sentimentConfig: Record<Sentiment, { icon: typeof TrendingUp; label: string; color: string }> = {
-    positive: { icon: TrendingUp, label: 'Positive', color: '#10b981' },
-    negative: { icon: TrendingDown, label: 'Negative', color: '#ef4444' },
-    neutral: { icon: Minus, label: 'Neutral', color: '#f59e0b' },
+  const sentimentLabels: Record<Sentiment, string> = {
+    positive: 'Positive',
+    negative: 'Negative',
+    neutral: 'Neutral',
   };
 
   const orderShortLabels: Record<ConsequenceOrder, string> = {
@@ -36,83 +41,116 @@ export function FilterPanel({
   };
 
   return (
-    <div className="p-4 border-b border-slate-200">
-      <div className="flex items-center gap-2 mb-4">
-        <Filter className="w-4 h-4 text-slate-500" />
-        <h3 className="font-semibold text-slate-700">Filters</h3>
-      </div>
+    <Box p={4} borderBottom="1px solid" borderColor="border.muted">
+      <Flex align="center" gap={2} mb={4}>
+        <Box as={Filter} w={4} h={4} color="fg.muted" />
+        <Text fontWeight="semibold" color="fg">Filters</Text>
+      </Flex>
 
       {/* STEEP Categories */}
-      <div className="mb-4">
-        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">STEEP Categories</p>
-        <div className="space-y-1">
-          {allCategories.map((cat) => (
-            <button
-              key={cat}
-              onClick={() => onToggleCategory(cat)}
-              className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-all ${
-                categories.includes(cat)
-                  ? 'bg-slate-100 text-slate-900'
-                  : 'text-slate-400 hover:text-slate-600'
-              }`}
-            >
-              <div
-                className="w-3 h-3 rounded-full"
-                style={{ backgroundColor: categories.includes(cat) ? STEEP_COLORS[cat] : '#e2e8f0' }}
-              />
-              {STEEP_LABELS[cat]}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Sentiment */}
-      <div className="mb-4">
-        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Sentiment</p>
-        <div className="flex gap-1">
-          {allSentiments.map((sent) => {
-            const config = sentimentConfig[sent];
-            const Icon = config.icon;
-            const isActive = sentiments.includes(sent);
+      <Box mb={4}>
+        <Text fontSize="xs" fontWeight="semibold" color="fg.muted" textTransform="uppercase" letterSpacing="wider" mb={2}>
+          STEEP Categories
+        </Text>
+        <Flex direction="column" gap={1}>
+          {allCategories.map((cat) => {
+            const isActive = categories.includes(cat);
             return (
-              <button
-                key={sent}
-                onClick={() => onToggleSentiment(sent)}
-                className={`flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-xs transition-all ${
-                  isActive ? 'text-white' : 'bg-slate-100 text-slate-500'
-                }`}
-                style={{ backgroundColor: isActive ? config.color : undefined }}
+              <Box
+                as="button"
+                key={cat}
+                onClick={() => onToggleCategory(cat)}
+                display="flex"
+                alignItems="center"
+                gap={2}
+                w="full"
+                px={3}
+                py={1.5}
+                rounded="lg"
+                fontSize="sm"
+                transition="all 0.15s"
+                style={isActive ? { backgroundColor: getSteepMutedBg(cat, isDark), color: getSteepTextColor(cat, isDark) } : {}}
+                color={isActive ? undefined : 'fg.muted'}
+                _hover={!isActive ? { color: 'fg.secondary' } : {}}
+                cursor="pointer"
+                fontWeight={isActive ? 'medium' : 'normal'}
               >
-                <Icon className="w-3 h-3" />
-              </button>
+                <Box w={4} display="flex" justifyContent="center" opacity={isActive ? 1 : 0.3}>
+                  <SteepIcon category={cat} size={14} />
+                </Box>
+                {STEEP_LABELS[cat]}
+              </Box>
             );
           })}
-        </div>
-      </div>
+        </Flex>
+      </Box>
+
+      {/* Sentiment */}
+      <Box mb={4}>
+        <Text fontSize="xs" fontWeight="semibold" color="fg.muted" textTransform="uppercase" letterSpacing="wider" mb={2}>
+          Sentiment
+        </Text>
+        <Flex gap={1}>
+          {allSentiments.map((sent) => {
+            const isActive = sentiments.includes(sent);
+            return (
+              <Box
+                as="button"
+                key={sent}
+                onClick={() => onToggleSentiment(sent)}
+                flex={1}
+                display="flex"
+                alignItems="center"
+                justifyContent="center"
+                gap={1}
+                px={2}
+                py={1.5}
+                rounded="lg"
+                fontSize="xs"
+                transition="all 0.15s"
+                bg={isActive ? 'fg' : 'bg.hover'}
+                color={isActive ? 'bg.canvas' : 'fg.muted'}
+                cursor="pointer"
+                title={sentimentLabels[sent]}
+              >
+                <Text fontSize="sm">{SENTIMENT_SYMBOLS[sent]}</Text>
+              </Box>
+            );
+          })}
+        </Flex>
+      </Box>
 
       {/* Order */}
-      <div>
-        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Consequence Order</p>
-        <div className="flex flex-wrap gap-1">
+      <Box>
+        <Text fontSize="xs" fontWeight="semibold" color="fg.muted" textTransform="uppercase" letterSpacing="wider" mb={2}>
+          Consequence Order
+        </Text>
+        <Flex flexWrap="wrap" gap={1}>
           {allOrders.map((ord) => (
-            <button
+            <Box
+              as="button"
               key={ord}
               onClick={() => onToggleOrder(ord)}
-              className={`px-2 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                orders.includes(ord)
-                  ? 'bg-seed text-white'
-                  : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
-              }`}
+              px={2}
+              py={1.5}
+              rounded="lg"
+              fontSize="xs"
+              fontWeight="medium"
+              transition="all 0.15s"
+              bg={orders.includes(ord) ? 'brand' : 'bg.hover'}
+              color={orders.includes(ord) ? 'brand.contrast' : 'fg.muted'}
+              _hover={!orders.includes(ord) ? { bg: 'bg.active' } : {}}
+              cursor="pointer"
               title={ORDER_LABELS[ord]}
             >
               {orderShortLabels[ord]}
-            </button>
+            </Box>
           ))}
-        </div>
-        <p className="text-[10px] text-slate-400 mt-1">
+        </Flex>
+        <Text fontSize="2xs" color="fg.muted" mt={1}>
           1: Direct → 2: Ripple → 3: Cascade
-        </p>
-      </div>
-    </div>
+        </Text>
+      </Box>
+    </Box>
   );
 }

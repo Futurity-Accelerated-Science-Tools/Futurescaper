@@ -1,17 +1,23 @@
 import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
-import ReactFlow, {
+import { Box, Flex, Text, Button } from '@chakra-ui/react';
+import {
+  ReactFlow,
   Background,
   Controls,
   MiniMap,
-  Node,
-  Edge,
   useNodesState,
   useEdgesState,
   ConnectionMode,
   MarkerType,
-  ReactFlowInstance,
-} from 'reactflow';
-import 'reactflow/dist/style.css';
+  BackgroundVariant,
+  BaseEdge,
+  type Node,
+  type Edge,
+  type ReactFlowInstance,
+  type EdgeProps,
+  Position as RFPosition,
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
 
 import {
   FutureInput,
@@ -23,26 +29,79 @@ import {
   Probability,
   TimeFrame,
   Importance,
-  getSentimentColors,
-  STEEP_COLORS,
   STEEP_LABELS,
-  PROBABILITY_COLORS,
+  SENTIMENT_SYMBOLS,
   ORDER_LABELS,
   SOLUTION_COLORS,
+  GenerationConfig,
+  DEFAULT_GENERATION_CONFIG,
+  ReportData,
+  ReportGenerationPhase,
 } from '../types';
 import { generateComprehensiveFuturescape, hasApiKey, GenerationPhase } from '../api/claude';
 import { generateConsequences } from '../mockData';
 import { ConsequenceNode, SeedNode, ConsequenceNodeData } from './ConsequenceNode';
+import { SteepIcon, getSteepMutedBg, getSteepTextColor } from './SteepIcon';
 import { ExportPanel } from './ExportPanel';
-import { ArrowLeft, AlertCircle, Lightbulb, FileText, Star, Target, Layers, TrendingUp, TrendingDown, Minus, Loader2, X, Send, Sparkles, Zap, Hammer, LayoutGrid, Filter, ChevronRight, ChevronLeft } from 'lucide-react';
+import { ReportPanel } from './ReportPanel';
+import { SaveToCloudButton } from './SaveToCloudButton';
+import { computeGraphStatistics, computeStructuralInsights } from '../utils/graphStats';
+import { generateReport } from '../api/reportGeneration';
+import { ArrowLeft, AlertCircle, Lightbulb, FileText, Star, Target, Layers, TrendingUp, TrendingDown, Minus, Loader2, X, Send, Sparkles, Zap, Hammer, LayoutGrid, Filter, ChevronRight, ChevronLeft, Sun, Moon, Eye, EyeOff, Cable, Unlink, ArrowRightLeft, CheckCircle2 } from 'lucide-react';
 import { expandNodeConsequences, freePromptExpand, generateSolutionIdeas, generateConsequencesWithAI, generateChildConsequencesWithAI } from '../api/claude';
 import { findRelevantSubjects, RelevantSubject } from '../api/subjects';
 import { RelatedSubjects } from './RelatedSubjects';
 import { computeRadialLayout, resolveCollisions, getOptimalHandles, computeFocusPositions, Position } from '../layout';
+import { useColorMode } from '../theme/ColorModeProvider';
 
 const nodeTypes = {
   seed: SeedNode,
   consequence: ConsequenceNode,
+};
+
+// ─── Custom edge: dramatic arc with straight approach to arrowhead ───
+// Uses a cubic bezier that bows out more than default, but the final
+// segment straightens to enter the target handle head-on.
+function getHandleOffset(position: RFPosition | undefined, distance: number): { dx: number; dy: number } {
+  switch (position) {
+    case RFPosition.Left:   return { dx: -distance, dy: 0 };
+    case RFPosition.Right:  return { dx: distance, dy: 0 };
+    case RFPosition.Top:    return { dx: 0, dy: -distance };
+    case RFPosition.Bottom: return { dx: 0, dy: distance };
+    default:                return { dx: distance, dy: 0 };
+  }
+}
+
+function StraightApproachEdge({
+  id, sourceX, sourceY, targetX, targetY,
+  sourcePosition, targetPosition,
+  style, markerEnd,
+}: EdgeProps) {
+  // Distance from handle to control point — controls how far the arc bows out
+  const dx = Math.abs(targetX - sourceX);
+  const dy = Math.abs(targetY - sourceY);
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  const arcStrength = Math.max(50, dist * 0.45); // bows out proportionally, min 50px
+
+  // Source control point: push away from source handle direction
+  const srcOff = getHandleOffset(sourcePosition, arcStrength);
+  const cx1 = sourceX + srcOff.dx;
+  const cy1 = sourceY + srcOff.dy;
+
+  // Target control point: push away from target handle direction (straightens approach)
+  // Use a shorter distance so the line straightens earlier
+  const approachDist = Math.max(30, dist * 0.3);
+  const tgtOff = getHandleOffset(targetPosition, approachDist);
+  const cx2 = targetX + tgtOff.dx;
+  const cy2 = targetY + tgtOff.dy;
+
+  const path = `M ${sourceX} ${sourceY} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${targetX} ${targetY}`;
+
+  return <BaseEdge id={id} path={path} style={style} markerEnd={markerEnd} />;
+}
+
+const edgeTypes = {
+  straightApproach: StraightApproachEdge,
 };
 
 // Type for imported data
@@ -58,11 +117,13 @@ interface FuturescapeMapProps {
   onApiError?: () => void;
   importedData?: ImportedData | null;
   manualMode?: boolean;
+  generationConfig?: GenerationConfig;
 }
 
-type ExtendedPhase = 'idle' | 'first-order' | 'second-order' | 'third-order' | 'solutions' | 'complete';
+type ExtendedPhase = 'idle' | 'first-order' | 'second-order' | 'third-order' | 'fourth-order' | 'fifth-order' | 'solutions' | 'complete';
 
-export function FuturescapeMap({ input, onBack, onApiError, importedData, manualMode = false }: FuturescapeMapProps) {
+export function FuturescapeMap({ input, onBack, onApiError, importedData, manualMode = false, generationConfig = DEFAULT_GENERATION_CONFIG }: FuturescapeMapProps) {
+  const { colorMode, toggleColorMode } = useColorMode();
   const [consequences, setConsequences] = useState<Consequence[]>(importedData?.consequences || []);
   const [generationPhase, setGenerationPhase] = useState<ExtendedPhase>(importedData ? 'complete' : (manualMode ? 'complete' : 'idle'));
   const [progressMessage, setProgressMessage] = useState<string>('');
@@ -75,14 +136,22 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
   const [promptText, setPromptText] = useState('');
   const [isPrompting, setIsPrompting] = useState(false);
   const [promptProgress, setPromptProgress] = useState('');
+  const incomingHandleMapRef = useRef<Map<string, string>>(new Map());
   const [showNewHighlight, setShowNewHighlight] = useState(false);
   const [lastExpansionTime, setLastExpansionTime] = useState<number | null>(null);
   const [showHighImpact, setShowHighImpact] = useState(false);
-  const [filterPanelCollapsed, setFilterPanelCollapsed] = useState(false);
+  const [filterPanelCollapsed, setFilterPanelCollapsed] = useState(true);
   const [relatedSubjects, setRelatedSubjects] = useState<RelevantSubject[]>([]);
   const [isLoadingSubjects, setIsLoadingSubjects] = useState(false);
   const subjectsRequested = useRef(false);
+  // Track how many consequences existed when subjects were last computed
+  const subjectsConsequenceCount = useRef(0);
   const generationStarted = useRef(importedData ? true : (manualMode ? true : false));
+
+  // ── Report state ──
+  const [reportData, setReportData] = useState<ReportData | null>(null);
+  const [reportPhase, setReportPhase] = useState<ReportGenerationPhase>('idle');
+  const [reportPanelOpen, setReportPanelOpen] = useState(false);
 
   // ── Interactive node state (radial menu / inline editing) ──
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
@@ -91,8 +160,72 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
 
   const [isGeneratingIdeasFor, setIsGeneratingIdeasFor] = useState<string | null>(null);
 
+  // ── Edge popover state (for disconnect / reverse) ──
+  const [edgePopover, setEdgePopover] = useState<{
+    edgeId: string;
+    parentId: string;
+    childId: string;
+    screenX: number;
+    screenY: number;
+  } | null>(null);
+
+  // ── Connect mode state ──
+  const [connectModeSourceId, setConnectModeSourceId] = useState<string | null>(null);
+  const [connectMousePos, setConnectMousePos] = useState<{ x: number; y: number } | null>(null);
+  const [connectHoveredNodeId, setConnectHoveredNodeId] = useState<string | null>(null);
+  const [isShiftHeld, setIsShiftHeld] = useState(false);
+
+  // Verbosity setting — controls AI text length per node
+  const [verbosity, setVerbosity] = useState<'concise' | 'detailed'>(input.verbosity || 'concise');
+
+  // Merge local verbosity into input for API calls
+  const effectiveInput = useMemo<FutureInput>(
+    () => ({ ...input, verbosity }),
+    [input, verbosity]
+  );
+
   // Computed: is comprehensive generation currently running?
   const isGenerationRunning = generationPhase !== 'complete' && generationPhase !== 'idle';
+
+  // Auto-clear "newly expanded" highlight after 5 seconds
+  useEffect(() => {
+    if (!showNewHighlight) return;
+    const timer = setTimeout(() => setShowNewHighlight(false), 5000);
+    return () => clearTimeout(timer);
+  }, [showNewHighlight, lastExpansionTime]);
+
+  // ── Connect mode: keyboard listeners (Escape to cancel, Shift for reverse direction) ──
+  useEffect(() => {
+    if (!connectModeSourceId) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setConnectModeSourceId(null);
+        setConnectMousePos(null);
+        setConnectHoveredNodeId(null);
+      }
+      if (e.key === 'Shift') setIsShiftHeld(true);
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') setIsShiftHeld(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      setIsShiftHeld(false);
+    };
+  }, [connectModeSourceId]);
+
+  // ── Connect mode: mouse move tracking ──
+  useEffect(() => {
+    if (!connectModeSourceId) return;
+    const handleMouseMove = (e: MouseEvent) => {
+      setConnectMousePos({ x: e.clientX, y: e.clientY });
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => window.removeEventListener('mousemove', handleMouseMove);
+  }, [connectModeSourceId]);
 
   // Highlight filters - nodes NOT in these filters get dimmed (not hidden)
   const [highlightFilters, setHighlightFilters] = useState({
@@ -103,6 +236,14 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     importance: ['critical', 'high', 'medium', 'low'] as Importance[],
     showIdeas: true,
   });
+
+  // Delete confirmation modal state (replaces native confirm() dialog)
+  const [pendingDelete, setPendingDelete] = useState<{
+    id: string;
+    descendantIds: string[];       // IDs that would be deleted in a branch delete
+    orphanUpdates?: Map<string, string[]>; // Surviving nodes that need parent refs cleaned (branch mode)
+    directChildIds: string[];      // Direct children that become unattached in single-node delete
+  } | null>(null);
 
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -121,16 +262,35 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
   const reactFlowInstanceRef = useRef<ReactFlowInstance | null>(null);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
 
-  // Check if a consequence should be highlighted (not dimmed)
+  // Check if a consequence should be highlighted (not dimmed).
+  // Uses the standard faceted-filter pattern: an empty category means
+  // "no restriction on this dimension" (show all), NOT "exclude everything".
+  // This way, clicking "None" then toggling one category feels natural —
+  // the user sees those nodes immediately without needing to also re-enable
+  // every sentiment, probability, etc.
+  //
+  // Special case: when ALL filter arrays are empty AND showIdeas is false
+  // (i.e. the user clicked "None"), nothing should be highlighted.
   const isHighlighted = useCallback((c: Consequence): boolean => {
+    const { categories, sentiments, orders, probabilities, importance, showIdeas } = highlightFilters;
+
+    // If every dimension is empty ("None" state), dim everything
+    const allEmpty = categories.length === 0 && sentiments.length === 0 &&
+      orders.length === 0 && probabilities.length === 0 &&
+      importance.length === 0 && !showIdeas;
+    if (allEmpty) return false;
+
+    // Ideas/solutions: only show when their toggle is on
     const isSolOrIdea = c.nodeType === 'solution' || c.nodeType === 'idea';
-    if (isSolOrIdea && !highlightFilters.showIdeas) return false;
+    if (isSolOrIdea && !showIdeas) return false;
+
+    // Faceted filter: empty array = no restriction on that dimension
     return (
-      highlightFilters.categories.includes(c.category) &&
-      highlightFilters.sentiments.includes(c.sentiment) &&
-      highlightFilters.orders.includes(c.order) &&
-      (!c.probability || highlightFilters.probabilities.includes(c.probability)) &&
-      (!c.importance || highlightFilters.importance.includes(c.importance))
+      (categories.length === 0 || categories.includes(c.category)) &&
+      (sentiments.length === 0 || sentiments.includes(c.sentiment)) &&
+      (orders.length === 0 || orders.includes(c.order)) &&
+      (probabilities.length === 0 || !c.probability || probabilities.includes(c.probability)) &&
+      (importance.length === 0 || !c.importance || importance.includes(c.importance))
     );
   }, [highlightFilters]);
 
@@ -141,13 +301,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     return m;
   }, [consequences]);
 
-  const parentMap = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const c of consequences) {
-      if (c.parentId) m.set(c.id, c.parentId);
-    }
-    return m;
-  }, [consequences]);
+
 
   // All consequences are shown, but some may be dimmed
   const filteredConsequences = useMemo(() => {
@@ -216,20 +370,13 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
 
   // ── Interactive handlers (must be before generateNodesAndEdges) ──
 
-  const handleSeedClick = useCallback(() => {
-    setActiveNodeId(prev => prev === 'seed' ? null : 'seed');
-    setEditingNodeId(null);
-  }, []);
-
-  const handleNodeClick = useCallback((id: string) => {
-    setActiveNodeId(prev => prev === id ? null : id);
-    setEditingNodeId(null);
-  }, []);
+  // handleSeedClick and handleNodeClick moved below connect handlers (see after isValidConnectTarget)
 
   const handleStartEdit = useCallback((id: string) => {
+    if (isGenerationRunning) return;
     setEditingNodeId(id);
     setActiveNodeId(null);
-  }, []);
+  }, [isGenerationRunning]);
 
   const handleSaveEdit = useCallback((id: string, updates: Partial<Consequence>) => {
     setConsequences(prev =>
@@ -252,6 +399,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
   }, [consequences]);
 
   const handleSeedAddChild = useCallback(() => {
+    if (isGenerationRunning) return;
     const newId = `manual-${Date.now()}`;
     const newConsequence: Consequence = {
       id: newId,
@@ -259,7 +407,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       sentiment: 'neutral',
       category: 'social',
       order: 1,
-      parentId: 'seed',
+      parentIds: ['seed'],
       probability: 'plausible',
       importance: 'medium',
       isManual: true,
@@ -267,16 +415,17 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     setConsequences(prev => [...prev, newConsequence]);
     setEditingNodeId(newId);
     setActiveNodeId(null);
-  }, []);
+  }, [isGenerationRunning]);
 
-  const handleSeedGenerateChildren = useCallback(async () => {
+  const handleSeedGenerateChildren = useCallback(async (count?: number) => {
     setIsGeneratingChildrenFor('seed');
     setActiveNodeId(null);
 
-    // Create 20 placeholder nodes
+    const effectiveCount = count ?? 6;
+    // Create placeholder nodes
     const placeholderIds: string[] = [];
     const placeholders: Consequence[] = [];
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < effectiveCount; i++) {
       const id = `placeholder-${Date.now()}-${i}`;
       placeholderIds.push(id);
       placeholders.push({
@@ -285,13 +434,15 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
         sentiment: 'neutral',
         category: 'social',
         order: 1,
-        parentId: 'seed',
+        parentIds: ['seed'],
       });
     }
     setConsequences(prev => [...prev, ...placeholders]);
 
     try {
-      const realConsequences = await generateConsequencesWithAI(input, 1, []);
+      // Pass existing first-order children so the AI avoids duplicates
+      const existingFirstOrder = consequences.filter(c => c.order === 1 && c.parentIds.includes('seed') && c.text);
+      const realConsequences = await generateConsequencesWithAI(effectiveInput, 1, existingFirstOrder, effectiveCount);
       setConsequences(prev => [
         ...prev.filter(c => !placeholderIds.includes(c.id)),
         ...realConsequences,
@@ -302,9 +453,10 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       setError((err as Error).message);
     }
     setIsGeneratingChildrenFor(null);
-  }, [input]);
+  }, [effectiveInput, consequences]);
 
   const handleAddChild = useCallback((parentId: string) => {
+    if (isGenerationRunning) return;
     const parent = consequenceMap.get(parentId);
     const newOrder = parent ? (Math.min(parent.order + 1, 5) as ConsequenceOrder) : 1;
     const newId = `manual-${Date.now()}`;
@@ -314,7 +466,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       sentiment: 'neutral',
       category: parent?.category || 'social',
       order: newOrder,
-      parentId,
+      parentIds: [parentId],
       probability: 'plausible',
       importance: 'medium',
       isManual: true,
@@ -322,20 +474,274 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     setConsequences(prev => [...prev, newConsequence]);
     setEditingNodeId(newId);
     setActiveNodeId(null);
-  }, [consequences]);
+  }, [consequences, isGenerationRunning]);
 
-  const handleGenerateChildren = useCallback(async (parentId: string) => {
+  // ── Connect mode: cycle detection ──
+  // Returns true if making `parentId` a parent of `childId` would create a cycle.
+  // Walks ALL parents via BFS from `parentId` upward — if we reach `childId`, it's a cycle.
+  const wouldCreateCycle = useCallback((parentId: string, childId: string): boolean => {
+    if (parentId === childId) return true;
+    // Walk ancestors of parentId. If childId is among them, connecting would create a cycle.
+    const visited = new Set<string>();
+    const queue = [parentId];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      if (current === childId) return true;
+      if (current === 'seed') continue;
+      const node = consequenceMap.get(current);
+      if (node) {
+        for (const pid of node.parentIds) {
+          if (!visited.has(pid)) queue.push(pid);
+        }
+      }
+    }
+    return false;
+  }, [consequenceMap]);
+
+  // ── Connect mode: enter ──
+  const handleEnterConnectMode = useCallback((sourceId: string) => {
+    if (isGenerationRunning) return;
+    setConnectModeSourceId(sourceId);
+    setConnectHoveredNodeId(null);
+    setActiveNodeId(null); // Deselect so toolbar hides
+  }, [isGenerationRunning]);
+
+  // ── Connect mode: complete connection ──
+  const handleCompleteConnection = useCallback((targetId: string) => {
+    if (!connectModeSourceId) return;
+    const sourceId = connectModeSourceId;
+
+    // Determine direction: normal = source is child, target is parent
+    // Shift reverses: source becomes parent of target
+    const parentId = isShiftHeld ? sourceId : targetId;
+    const childId = isShiftHeld ? targetId : sourceId;
+
+    // Validation
+    if (parentId === childId) return;
+    const child = childId === 'seed' ? null : consequenceMap.get(childId);
+    // Can't make seed a child
+    if (childId === 'seed') return;
+    if (!child) return;
+
+    // Already connected?
+    if (child.parentIds.includes(parentId)) {
+      setConnectModeSourceId(null);
+      setConnectMousePos(null);
+      setConnectHoveredNodeId(null);
+      return;
+    }
+
+    // Cycle check
+    if (wouldCreateCycle(parentId, childId)) {
+      setConnectModeSourceId(null);
+      setConnectMousePos(null);
+      setConnectHoveredNodeId(null);
+      return;
+    }
+
+    // Compute new order: max(parent orders) + 1
+    const parentNode = parentId === 'seed' ? null : consequenceMap.get(parentId);
+    const parentOrder = parentNode ? parentNode.order : 0;
+    const newParentIds = [...child.parentIds.filter(id => id !== ''), parentId];
+    // If child was unattached (parentIds=[]), replace with [parentId]
+    const cleanedParentIds = newParentIds.length > 0 ? newParentIds : [parentId];
+
+    // Calculate order from all parents
+    let maxParentOrder = 0;
+    for (const pid of cleanedParentIds) {
+      if (pid === 'seed') { maxParentOrder = Math.max(maxParentOrder, 0); continue; }
+      const p = consequenceMap.get(pid);
+      if (p) maxParentOrder = Math.max(maxParentOrder, p.order);
+    }
+    const newOrder = Math.min(maxParentOrder + 1, 5) as ConsequenceOrder;
+
+    setConsequences(prev => prev.map(c =>
+      c.id === childId
+        ? { ...c, parentIds: cleanedParentIds, order: newOrder }
+        : c
+    ));
+
+    // Exit connect mode
+    setConnectModeSourceId(null);
+    setConnectMousePos(null);
+    setConnectHoveredNodeId(null);
+  }, [connectModeSourceId, isShiftHeld, consequenceMap, wouldCreateCycle]);
+
+  // ── Connect mode: cancel ──
+  const handleCancelConnectMode = useCallback(() => {
+    setConnectModeSourceId(null);
+    setConnectMousePos(null);
+    setConnectHoveredNodeId(null);
+  }, []);
+
+  // ── Connect mode: check if a node is a valid target ──
+  const isValidConnectTarget = useCallback((nodeId: string): boolean => {
+    if (!connectModeSourceId) return false;
+    if (nodeId === connectModeSourceId) return false;
+
+    const sourceId = connectModeSourceId;
+    const parentId = isShiftHeld ? sourceId : nodeId;
+    const childId = isShiftHeld ? nodeId : sourceId;
+
+    // Can't make seed a child
+    if (childId === 'seed') return false;
+
+    const child = consequenceMap.get(childId);
+    if (!child) return false;
+
+    // Already connected
+    if (child.parentIds.includes(parentId)) return false;
+
+    // Would create cycle
+    if (wouldCreateCycle(parentId, childId)) return false;
+
+    return true;
+  }, [connectModeSourceId, isShiftHeld, consequenceMap, wouldCreateCycle]);
+
+  // ── Edge click handler — shows popover with Disconnect / Reverse ──
+  const handleEdgeClick = useCallback((_event: React.MouseEvent, edge: Edge) => {
+    if (isGenerationRunning) return;
+
+    // Parse edge ID: "edge-{parentId}-{childId}"
+    const parentId = edge.source;
+    const childId = edge.target;
+
+    // Only show popover for consequence edges (not placeholder/generating)
+    if (childId.startsWith('placeholder-')) return;
+
+    // Get screen position from the click event
+    setEdgePopover({
+      edgeId: edge.id,
+      parentId,
+      childId,
+      screenX: _event.clientX,
+      screenY: _event.clientY,
+    });
+  }, [isGenerationRunning]);
+
+  // ── Disconnect: remove a parent from a child's parentIds ──
+  const handleDisconnect = useCallback(() => {
+    if (!edgePopover) return;
+    const { parentId, childId } = edgePopover;
+    setConsequences(prev => prev.map(c => {
+      if (c.id !== childId) return c;
+      const newParentIds = c.parentIds.filter(pid => pid !== parentId);
+      return { ...c, parentIds: newParentIds };
+    }));
+    setEdgePopover(null);
+  }, [edgePopover]);
+
+  // ── Reverse: swap parent↔child direction ──
+  const handleReverseEdge = useCallback(() => {
+    if (!edgePopover) return;
+    const { parentId, childId } = edgePopover;
+
+    // Can't reverse if parent is seed (seed can't become a child)
+    if (parentId === 'seed') {
+      setEdgePopover(null);
+      return;
+    }
+
+    const parentNode = consequenceMap.get(parentId);
+    const childNode = consequenceMap.get(childId);
+    if (!parentNode || !childNode) { setEdgePopover(null); return; }
+
+    // Cycle check must ignore the existing edge being reversed.
+    // After reversal, childId becomes parent of parentId.
+    // Walk ancestors of childId (the new parent) — but skip the
+    // current parentId→childId link — looking for parentId (the new child).
+    const wouldCycleAfterReverse = (() => {
+      const visited = new Set<string>();
+      const queue = [childId];
+      while (queue.length > 0) {
+        const current = queue.shift()!;
+        if (visited.has(current)) continue;
+        visited.add(current);
+        if (current === parentId) return true;
+        if (current === 'seed') continue;
+        const node = consequenceMap.get(current);
+        if (node) {
+          for (const pid of node.parentIds) {
+            // Skip the edge we're about to remove (childId's link to parentId)
+            if (current === childId && pid === parentId) continue;
+            if (!visited.has(pid)) queue.push(pid);
+          }
+        }
+      }
+      return false;
+    })();
+
+    if (wouldCycleAfterReverse) {
+      setEdgePopover(null);
+      return;
+    }
+
+    setConsequences(prev => prev.map(c => {
+      if (c.id === childId) {
+        // Remove old parent
+        const newParentIds = c.parentIds.filter(pid => pid !== parentId);
+        return { ...c, parentIds: newParentIds };
+      }
+      if (c.id === parentId) {
+        // Add child as new parent
+        const newParentIds = [...c.parentIds, childId];
+        // Recalculate order
+        let maxParentOrder = 0;
+        for (const pid of newParentIds) {
+          if (pid === 'seed') continue;
+          const p = consequenceMap.get(pid);
+          if (p) maxParentOrder = Math.max(maxParentOrder, p.order);
+        }
+        const newOrder = Math.min(maxParentOrder + 1, 5) as ConsequenceOrder;
+        return { ...c, parentIds: newParentIds, order: newOrder };
+      }
+      return c;
+    }));
+    setEdgePopover(null);
+  }, [edgePopover, consequenceMap]);
+
+  // ── handleSeedClick & handleNodeClick (after connect handlers to avoid hoisting issues) ──
+  const handleSeedClick = useCallback(() => {
+    if (isGenerationRunning) return;
+    if (connectModeSourceId) {
+      if (isValidConnectTarget('seed')) {
+        handleCompleteConnection('seed');
+      }
+      return;
+    }
+    setActiveNodeId(prev => prev === 'seed' ? null : 'seed');
+    setEditingNodeId(null);
+    setEdgePopover(null);
+  }, [isGenerationRunning, connectModeSourceId, isValidConnectTarget, handleCompleteConnection]);
+
+  const handleNodeClick = useCallback((id: string) => {
+    if (isGenerationRunning) return;
+    if (connectModeSourceId) {
+      if (isValidConnectTarget(id)) {
+        handleCompleteConnection(id);
+      }
+      return;
+    }
+    setActiveNodeId(prev => prev === id ? null : id);
+    setEditingNodeId(null);
+    setEdgePopover(null);
+  }, [isGenerationRunning, connectModeSourceId, isValidConnectTarget, handleCompleteConnection]);
+
+  const handleGenerateChildren = useCallback(async (parentId: string, count?: number) => {
     const parent = consequenceMap.get(parentId);
     if (!parent) return;
 
     setIsGeneratingChildrenFor(parentId);
     setActiveNodeId(null);
 
-    // Create 3 placeholder nodes
+    // Create placeholder nodes matching requested count
+    const effectiveCount = count ?? 3;
     const newOrder = Math.min(parent.order + 1, 5) as ConsequenceOrder;
     const placeholderIds: string[] = [];
     const placeholders: Consequence[] = [];
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < effectiveCount; i++) {
       const id = `placeholder-${Date.now()}-${i}`;
       placeholderIds.push(id);
       placeholders.push({
@@ -344,13 +750,15 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
         sentiment: 'neutral',
         category: 'social',
         order: newOrder,
-        parentId,
+        parentIds: [parentId],
       });
     }
     setConsequences(prev => [...prev, ...placeholders]);
 
     try {
-      const realConsequences = await generateChildConsequencesWithAI(input, parent);
+      // Pass existing children of this parent so the AI avoids duplicates
+      const existingSiblings = consequences.filter(c => c.parentIds.includes(parentId) && c.text);
+      const realConsequences = await generateChildConsequencesWithAI(effectiveInput, parent, effectiveCount, existingSiblings);
       setConsequences(prev => [
         ...prev.filter(c => !placeholderIds.includes(c.id)),
         ...realConsequences,
@@ -361,20 +769,21 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       setError((err as Error).message);
     }
     setIsGeneratingChildrenFor(null);
-  }, [consequences, input]);
+  }, [consequences, effectiveInput]);
 
-  const handleRadialGenerateIdeas = useCallback(async (nodeId: string) => {
+  const handleRadialGenerateIdeas = useCallback(async (nodeId: string, count?: number) => {
     const targetNode = consequenceMap.get(nodeId);
     if (!targetNode) return;
 
     setIsGeneratingIdeasFor(nodeId);
     setActiveNodeId(null);
 
-    // Create 2 placeholder nodes for ideas
+    // Create placeholder nodes for ideas matching requested count
+    const effectiveCount = count ?? 2;
     const newOrder = Math.min(targetNode.order + 1, 5) as ConsequenceOrder;
     const placeholderIds: string[] = [];
     const placeholders: Consequence[] = [];
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < effectiveCount; i++) {
       const id = `placeholder-${Date.now()}-${i}`;
       placeholderIds.push(id);
       placeholders.push({
@@ -383,14 +792,14 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
         sentiment: 'positive',
         category: targetNode.category,
         order: newOrder,
-        parentId: nodeId,
+        parentIds: [nodeId],
       });
     }
     setConsequences(prev => [...prev, ...placeholders]);
 
     try {
       const expandTime = Date.now();
-      const newIdeas = await generateSolutionIdeas(input, targetNode, consequences);
+      const newIdeas = await generateSolutionIdeas(effectiveInput, targetNode, consequences, effectiveCount);
       const stamped = newIdeas.map(c => ({ ...c, expandedAt: expandTime }));
       setConsequences(prev => [
         ...prev.filter(c => !placeholderIds.includes(c.id)),
@@ -404,54 +813,183 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       setError((err as Error).message);
     }
     setIsGeneratingIdeasFor(null);
-  }, [consequences, input]);
+  }, [consequences, effectiveInput]);
 
   const handleRadialDelete = useCallback((id: string) => {
-    // Recursively find all descendants
-    const findDescendants = (parentId: string, all: Consequence[]): string[] => {
-      const children = all.filter(c => c.parentId === parentId);
-      const childIds = children.map(c => c.id);
-      const grandchildIds = children.flatMap(c => findDescendants(c.id, all));
-      return [...childIds, ...grandchildIds];
-    };
+    if (isGenerationRunning) return;
 
-    const descendantIds = findDescendants(id, consequences);
-    const totalToDelete = descendantIds.length + 1; // +1 for the node itself
-
-    let message: string;
-    if (descendantIds.length === 0) {
-      message = 'Delete this node?';
-    } else {
-      message = `Delete this node and its entire branch?\n\nThis will remove ${totalToDelete} node${totalToDelete > 1 ? 's' : ''} total (this node + ${descendantIds.length} descendant${descendantIds.length > 1 ? 's' : ''}).`;
+    // ── Branch deletion set (DAG-aware) ──
+    // Only delete a descendant if ALL of its parents are in the deletion set.
+    const deletionSet = new Set<string>([id]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const c of consequences) {
+        if (deletionSet.has(c.id)) continue;
+        if (c.parentIds.length > 0 && c.parentIds.every(pid => deletionSet.has(pid))) {
+          deletionSet.add(c.id);
+          changed = true;
+        }
+      }
     }
 
-    if (!confirm(message)) return;
+    // Nodes that have the deleted node as ONE of multiple parents — they survive
+    // but need that parent reference removed (for branch delete mode)
+    const orphanUpdates = new Map<string, string[]>();
+    for (const c of consequences) {
+      if (deletionSet.has(c.id)) continue;
+      if (c.parentIds.some(pid => deletionSet.has(pid))) {
+        orphanUpdates.set(c.id, c.parentIds.filter(pid => !deletionSet.has(pid)));
+      }
+    }
 
-    const idsToRemove = new Set([id, ...descendantIds]);
-    setConsequences(prev => prev.filter(c => !idsToRemove.has(c.id)));
-    setActiveNodeId(null);
-  }, [consequences]);
+    // ── Direct children that would become unattached in single-node delete ──
+    const directChildIds = consequences
+      .filter(c => c.parentIds.includes(id))
+      .map(c => c.id);
 
-  const handlePaneClick = useCallback(() => {
+    setPendingDelete({
+      id,
+      descendantIds: [...deletionSet].filter(did => did !== id),
+      orphanUpdates,
+      directChildIds,
+    });
+  }, [consequences, isGenerationRunning]);
+
+  // ── Single-node delete: remove only this node, children lose this parent ref ──
+  const confirmDeleteSingle = useCallback(() => {
+    if (!pendingDelete) return;
+    const deletedId = pendingDelete.id;
+    setConsequences(prev => prev
+      .filter(c => c.id !== deletedId)
+      .map(c => {
+        // Remove deleted node from any child's parentIds
+        if (c.parentIds.includes(deletedId)) {
+          return { ...c, parentIds: c.parentIds.filter(pid => pid !== deletedId) };
+        }
+        return c;
+      })
+    );
     setActiveNodeId(null);
-    setEditingNodeId(null);
+    setPendingDelete(null);
+  }, [pendingDelete]);
+
+  // ── Branch delete: remove this node and all exclusive descendants ──
+  const confirmDeleteBranch = useCallback(() => {
+    if (!pendingDelete) return;
+    const idsToRemove = new Set([pendingDelete.id, ...pendingDelete.descendantIds]);
+    setConsequences(prev => prev
+      .filter(c => !idsToRemove.has(c.id))
+      .map(c => {
+        // Update surviving nodes that lost a parent
+        const newParentIds = pendingDelete.orphanUpdates?.get(c.id);
+        if (newParentIds) return { ...c, parentIds: newParentIds };
+        return c;
+      })
+    );
+    setActiveNodeId(null);
+    setPendingDelete(null);
+  }, [pendingDelete]);
+
+  const cancelPendingDelete = useCallback(() => {
+    setPendingDelete(null);
   }, []);
 
-  // Find the full ancestor chain for a node (including the node itself)
+  const handlePaneClick = useCallback((event?: React.MouseEvent) => {
+    // If in connect mode, clicking the pane cancels it
+    if (connectModeSourceId) {
+      handleCancelConnectMode();
+      return;
+    }
+    setActiveNodeId(null);
+    setEditingNodeId(null);
+    setContextMenu(null);
+    setEdgePopover(null);
+  }, [connectModeSourceId, handleCancelConnectMode]);
+
+  // ── Right-click context menu for creating unattached nodes ──
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; flowPosition: { x: number; y: number } } | null>(null);
+
+  const handlePaneContextMenu = useCallback((event: React.MouseEvent) => {
+    event.preventDefault();
+    if (isGenerationRunning) return;
+    const rfInstance = reactFlowInstanceRef.current;
+    if (!rfInstance) return;
+    // Convert screen coordinates to flow (canvas) coordinates
+    const flowPosition = rfInstance.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    setContextMenu({ x: event.clientX, y: event.clientY, flowPosition });
+  }, [isGenerationRunning]);
+
+  const handleContextMenuAddNode = useCallback(() => {
+    if (isGenerationRunning) return;
+    if (!contextMenu) return;
+    const newId = `manual-${Date.now()}`;
+    const newConsequence: Consequence = {
+      id: newId,
+      text: '',
+      sentiment: 'neutral',
+      category: 'social',
+      order: 1,
+      parentIds: [], // Unattached — user will connect it later
+      probability: 'plausible',
+      importance: 'medium',
+      isManual: true,
+      pinned: true, // Stay at placed position
+    };
+    setConsequences(prev => [...prev, newConsequence]);
+    // Store the position so layout places it at the click location
+    existingPositionsRef.current.set(newId, contextMenu.flowPosition);
+    setEditingNodeId(newId);
+    setActiveNodeId(null);
+    setContextMenu(null);
+  }, [contextMenu, isGenerationRunning]);
+
+  // ── Track existing positions for pinned/manually-placed nodes ──
+  const existingPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+
+  // Find the full ancestor chain for a node (including the node itself).
+  // Uses BFS to walk ALL parents (not just primary), so multi-parent nodes
+  // highlight every path back to the seed.
   const getAncestorChain = useCallback((nodeId: string | null): Set<string> => {
     if (!nodeId) return new Set();
     const chain = new Set<string>();
-    chain.add(nodeId);
-    let currentId: string | undefined = nodeId;
-    while (currentId && currentId !== 'seed') {
-      const pid = parentMap.get(currentId);
-      if (!pid) break;
-      chain.add(pid);
-      currentId = pid;
+    const queue: string[] = [nodeId];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (chain.has(current)) continue;
+      chain.add(current);
+      if (current === 'seed') continue;
+      const node = consequenceMap.get(current);
+      if (node) {
+        for (const pid of node.parentIds) {
+          if (!chain.has(pid)) queue.push(pid);
+        }
+      }
     }
     chain.add('seed');
     return chain;
-  }, [parentMap]);
+  }, [consequenceMap]);
+
+  // Check if a node can reach seed by walking all parents (BFS).
+  // Returns false for unattached nodes or floating chains.
+  const isReachableFromSeed = useCallback((nodeId: string): boolean => {
+    const visited = new Set<string>();
+    const queue = [nodeId];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      if (current === 'seed') return true;
+      const node = consequenceMap.get(current);
+      if (node) {
+        for (const pid of node.parentIds) {
+          if (pid === 'seed') return true;
+          if (!visited.has(pid)) queue.push(pid);
+        }
+      }
+    }
+    return false;
+  }, [consequenceMap]);
 
   // ── Center viewport on a node, biased toward its ancestor chain ──
   // Guarantees the selected node is fully visible with margin.
@@ -541,26 +1079,38 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     positionMap: Map<string, Position>,
   ): Edge[] => {
     const newEdges: Edge[] = [];
+    const handleMap = new Map<string, string>();
     const phaseMap: Record<number, ExtendedPhase> = {
-      1: 'first-order', 2: 'second-order', 3: 'third-order', 4: 'complete', 5: 'complete',
+      1: 'first-order', 2: 'second-order', 3: 'third-order', 4: 'solutions', 5: 'solutions',
     };
 
     // Compute ancestor chain for z-index elevation
     const elevatedNodes = getAncestorChain(activeNodeId);
     const hasElevation = elevatedNodes.size > 0;
 
+    const sentimentEdgeColors: Record<string, string> = { positive: '#22c55e', negative: '#ef4444', neutral: '#94a3b8' };
+    // Idea/solution edges: opposite of bg — concrete color for SVG compatibility
+    const ideaEdgeColor = colorMode === 'dark' ? '#e0e0e0' : '#1B1B1D';
+
     for (const c of allConsequences) {
-      const parentId = c.parentId || 'seed';
-      const parentPos = positionMap.get(parentId);
+      // Multi-parent: create one edge per parent
+      // If parentIds is empty, the node is unattached — no edges drawn
+      const parents = c.parentIds;
+      if (parents.length === 0) continue;
       const childPos = positionMap.get(c.id);
-      if (!parentPos || !childPos) continue;
+      if (!childPos) continue;
 
       const isDimmed = !isHighlighted(c);
-      const isWildcard = c.probability === 'wildcard';
       const isSolOrIdea = c.nodeType === 'solution' || c.nodeType === 'idea';
-      const edgeColor = isSolOrIdea ? SOLUTION_COLORS.border : isWildcard ? '#8b5cf6' : getSentimentColors(c.sentiment).border;
-      const { sourceHandle, targetHandle } = getOptimalHandles(parentPos, childPos);
-      const isElevated = hasElevation && elevatedNodes.has(parentId) && elevatedNodes.has(c.id);
+      const edgeColor = isSolOrIdea ? ideaEdgeColor : sentimentEdgeColors[c.sentiment] || '#94a3b8';
+
+      for (const parentId of parents) {
+        const parentPos = positionMap.get(parentId);
+        if (!parentPos) continue;
+
+        const { sourceHandle, targetHandle } = getOptimalHandles(parentPos, childPos);
+        handleMap.set(c.id, targetHandle);
+        const isElevated = hasElevation && elevatedNodes.has(parentId) && elevatedNodes.has(c.id);
 
       newEdges.push({
         id: `edge-${parentId}-${c.id}`,
@@ -568,35 +1118,36 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
         target: c.id,
         sourceHandle,
         targetHandle,
-        type: 'default',
+        type: 'straightApproach',
         zIndex: isElevated ? 999 : undefined,
         style: {
           stroke: edgeColor,
-          strokeWidth: isDimmed ? 1 : (isElevated ? 4 : 2),
-          strokeDasharray: isSolOrIdea ? '8,4' : isWildcard ? '5,5' : undefined,
-          opacity: isDimmed ? 0.15 : (isElevated ? 1 : (c.order === 1 ? 0.7 : 0.6)),
+          strokeWidth: isDimmed ? 1 : (isElevated ? 3 : 1.5),
+          // All edges solid — no dashing for wildcards or ideas
+          opacity: isDimmed ? 0.1 : (isElevated ? 0.85 : (c.order === 1 ? 0.5 : 0.4)),
         },
         markerEnd: {
           type: MarkerType.ArrowClosed,
           color: edgeColor,
-          width: isElevated ? 18 : (c.order === 1 ? 15 : 12),
-          height: isElevated ? 18 : (c.order === 1 ? 15 : 12),
         },
-        animated: generationPhase === phaseMap[c.order],
+        animated: c.id.startsWith('placeholder-') || (generationPhase !== 'complete' && generationPhase !== 'idle' && generationPhase === phaseMap[c.order]),
       });
-    }
+      } // end inner parent loop
+    } // end consequence loop
+    incomingHandleMapRef.current = handleMap;
     return newEdges;
-  }, [isHighlighted, generationPhase, getAncestorChain, activeNodeId]);
+  }, [isHighlighted, generationPhase, getAncestorChain, activeNodeId, colorMode]);
 
   // ─── Build data object for a single consequence node ───────────
   const buildConsequenceData = useCallback((c: Consequence): ConsequenceNodeData => {
     const isPlaceholderNode = c.id.startsWith('placeholder-');
     const phaseMap: Record<number, ExtendedPhase> = {
-      1: 'first-order', 2: 'second-order', 3: 'third-order', 4: 'complete', 5: 'complete',
+      1: 'first-order', 2: 'second-order', 3: 'third-order', 4: 'solutions', 5: 'solutions',
     };
     return {
       consequence: c,
-      isGenerating: generationPhase === phaseMap[c.order],
+      // Only pulse during active generation phases, never during 'complete'
+      isGenerating: generationPhase !== 'complete' && generationPhase !== 'idle' && generationPhase === phaseMap[c.order],
       isDimmed: !isHighlighted(c),
       isNewlyExpanded: showNewHighlight && !!c.expandedAt && c.expandedAt === lastExpansionTime,
       isSelected: activeNodeId === c.id,
@@ -605,19 +1156,29 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       isGeneratingIdeas: isGeneratingIdeasFor === c.id,
       isPlaceholder: isPlaceholderNode,
       isGenerationInProgress: isGenerationRunning,
+      incomingHandle: incomingHandleMapRef.current.get(c.id),
+      // Unattached indicator — node has no path back to seed
+      isUnattached: !isPlaceholderNode && !isReachableFromSeed(c.id),
+      // Connect mode visual state
+      isConnectSource: connectModeSourceId === c.id,
+      isConnectValidTarget: !!connectModeSourceId && connectModeSourceId !== c.id && isValidConnectTarget(c.id),
+      isConnectInvalid: !!connectModeSourceId && connectModeSourceId !== c.id && !isValidConnectTarget(c.id),
+      isConnectMode: !!connectModeSourceId,
       onClick: handleNodeClick,
       onStartEdit: handleStartEdit,
       onSaveEdit: handleSaveEdit,
       onCancelEdit: handleCancelEdit,
       onAddChild: handleAddChild,
+      onConnect: handleEnterConnectMode,
       onGenerateChildren: handleGenerateChildren,
       onGenerateIdeas: handleRadialGenerateIdeas,
       onDelete: handleRadialDelete,
     };
   }, [generationPhase, isHighlighted, showNewHighlight, lastExpansionTime,
       activeNodeId, editingNodeId, isGeneratingChildrenFor, isGeneratingIdeasFor, isGenerationRunning,
+      connectModeSourceId, isValidConnectTarget, isReachableFromSeed,
       handleNodeClick, handleStartEdit, handleSaveEdit, handleCancelEdit,
-      handleAddChild, handleGenerateChildren, handleRadialGenerateIdeas, handleRadialDelete]);
+      handleAddChild, handleEnterConnectMode, handleGenerateChildren, handleRadialGenerateIdeas, handleRadialDelete]);
 
   // ─── STRUCTURAL SYNC — runs when consequences change ───────────
   // Computes positions for new nodes, removes deleted nodes, rebuilds edges.
@@ -632,9 +1193,13 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     for (const n of nodesRef.current) {
       existingPositions.set(n.id, n.position);
     }
+    // Merge in manually placed positions (from right-click node creation)
+    existingPositionsRef.current.forEach((pos, id) => {
+      existingPositions.set(id, pos);
+    });
 
     // Compute layout: new nodes get positions, existing ones keep theirs
-    const layoutPositions = computeRadialLayout(consequences, existingPositions);
+    const layoutPositions = computeRadialLayout(consequences, existingPositions, false, verbosity);
     resolveCollisions(layoutPositions, consequences);
 
     // Determine which nodes are new vs. existing vs. removed
@@ -646,6 +1211,8 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     // Build the elevated set for z-index
     const elevatedNodes = getAncestorChain(activeNodeId);
     const hasElevation = elevatedNodes.size > 0;
+    // Preserve focus dimming when a non-seed node is actively focused
+    const hasFocus = !!activeNodeId && activeNodeId !== 'seed';
 
     setNodes(prev => {
       // Remove deleted nodes
@@ -663,6 +1230,8 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
               isSelected: activeNodeId === 'seed',
               isGeneratingChildren: isGeneratingChildrenFor === 'seed',
               isGenerationInProgress: isGenerationRunning,
+              isConnectValidTarget: !!connectModeSourceId && isValidConnectTarget('seed'),
+              isConnectMode: !!connectModeSourceId,
               onClick: handleSeedClick,
               onAddChild: handleSeedAddChild,
               onGenerateChildren: handleSeedGenerateChildren,
@@ -674,8 +1243,8 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
         return {
           ...n,
           zIndex: hasElevation && elevatedNodes.has(n.id) ? (activeNodeId === n.id ? 1001 : 1000) : undefined,
-          draggable: !c.id.startsWith('placeholder-') && editingNodeId !== c.id,
-          data: buildConsequenceData(c),
+          draggable: !c.id.startsWith('placeholder-') && editingNodeId !== c.id && !isGenerationRunning,
+          data: { ...buildConsequenceData(c), ...(hasFocus ? { isFocusDimmed: !elevatedNodes.has(n.id) } : {}) },
         };
       });
 
@@ -703,13 +1272,17 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       for (const c of consequences) {
         if (!addedIds.has(c.id)) continue;
         const pos = layoutPositions.get(c.id) || { x: 0, y: 0 };
+        // Newly added nodes get elevated z-index so they appear in front of parents
+        const isEditing = editingNodeId === c.id;
+        const elevatedZ = hasElevation && elevatedNodes.has(c.id) ? (activeNodeId === c.id ? 1001 : 1000) : undefined;
+        const newNodeZ = isEditing ? 1002 : 900; // editing nodes on top, new nodes above default
         updated.push({
           id: c.id,
           type: 'consequence',
           position: pos,
-          draggable: !c.id.startsWith('placeholder-') && editingNodeId !== c.id,
-          zIndex: hasElevation && elevatedNodes.has(c.id) ? (activeNodeId === c.id ? 1001 : 1000) : undefined,
-          data: buildConsequenceData(c),
+          draggable: !c.id.startsWith('placeholder-') && !isEditing && !isGenerationRunning,
+          zIndex: elevatedZ ?? newNodeZ,
+          data: { ...buildConsequenceData(c), ...(hasFocus ? { isFocusDimmed: !elevatedNodes.has(c.id) } : {}) },
         });
       }
 
@@ -725,25 +1298,36 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       if (!addedIds.has(id)) allPositions.set(id, pos);
     });
 
-    setEdges(buildEdges(consequences, allPositions));
+    const builtEdges = buildEdges(consequences, allPositions);
+    setEdges(builtEdges);
     prevConsequenceIdsRef.current = currentIds;
 
-    // If new nodes were added, zoom to fit all nodes after a short delay
+    // If new nodes were added, re-set edges after a tick so ReactFlow
+    // can measure the new DOM nodes and render the edge paths correctly.
     if (addedIds.size > 0) {
+      requestAnimationFrame(() => setEdges(buildEdges(consequences, allPositions)));
       setTimeout(() => {
-        reactFlowInstanceRef.current?.fitView({ padding: 0.2, duration: 400 });
+        const addedNodeIds = Array.from(addedIds);
+        reactFlowInstanceRef.current?.fitView({
+          padding: 0.3,
+          duration: 400,
+          nodes: addedNodeIds.map(id => ({ id })) as any,
+        });
       }, 100);
     }
   }, [consequences, consequenceMap, input, activeNodeId, editingNodeId,
       isGeneratingChildrenFor, isGenerationRunning, getAncestorChain,
       handleSeedClick, handleSeedAddChild, handleSeedGenerateChildren,
-      buildConsequenceData, buildEdges, setNodes, setEdges]);
+      buildConsequenceData, buildEdges, setNodes, setEdges, verbosity]);
 
   // ─── DATA-ONLY UPDATE — runs on UI state changes ───────────────
   // Updates node data (selection, dimming, z-index) without touching positions.
   const updateNodeDataOnly = useCallback(() => {
     const elevatedNodes = getAncestorChain(activeNodeId);
     const hasElevation = elevatedNodes.size > 0;
+    // When a non-seed node is focused, propagate focus dimming so it
+    // isn't lost when this function overwrites node data.
+    const hasFocus = !!activeNodeId && activeNodeId !== 'seed';
 
     setNodes(prev => prev.map(n => {
       if (n.id === 'seed') {
@@ -764,11 +1348,13 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
       }
       const c = consequenceMap.get(n.id);
       if (!c) return n;
+      const isEditingThis = editingNodeId === c.id;
+      const chainZ = hasElevation && elevatedNodes.has(n.id) ? (activeNodeId === n.id ? 1001 : 1000) : undefined;
       return {
         ...n,
-        zIndex: hasElevation && elevatedNodes.has(n.id) ? (activeNodeId === n.id ? 1001 : 1000) : undefined,
-        draggable: !c.id.startsWith('placeholder-') && editingNodeId !== c.id,
-        data: buildConsequenceData(c),
+        zIndex: isEditingThis ? 1002 : chainZ,
+        draggable: !c.id.startsWith('placeholder-') && !isEditingThis && !isGenerationRunning,
+        data: { ...buildConsequenceData(c), ...(hasFocus ? { isFocusDimmed: !elevatedNodes.has(n.id) } : {}) },
       };
     }));
 
@@ -776,7 +1362,10 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     // Build a quick edge-id → consequence lookup to avoid O(N) find per edge
     const edgeToConsequence = new Map<string, Consequence>();
     for (const c of consequences) {
-      edgeToConsequence.set(`edge-${c.parentId || 'seed'}-${c.id}`, c);
+      // Multi-parent: register edge IDs for all parents
+      for (const pid of c.parentIds) {
+        edgeToConsequence.set(`edge-${pid}-${c.id}`, c);
+      }
     }
     const phaseMap: Record<number, ExtendedPhase> = {
       1: 'first-order', 2: 'second-order', 3: 'third-order', 4: 'complete', 5: 'complete',
@@ -789,10 +1378,11 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
         const isDimmed = !isHighlighted(c);
         const isWildcard = c.probability === 'wildcard';
         const isSolOrIdea = c.nodeType === 'solution' || c.nodeType === 'idea';
-        const edgeColor = isSolOrIdea ? SOLUTION_COLORS.border : isWildcard ? '#8b5cf6' : getSentimentColors(c.sentiment).border;
+        const edgeColor = isSolOrIdea ? '#0005e9' : isWildcard ? '#8b5cf6' : 'var(--chakra-colors-fg-muted, #94a3b8)';
         // Elevate edges whose both endpoints are in the ancestor chain
-        const parentId = c.parentId || 'seed';
-        const isElevated = hasElevation && elevatedNodes.has(parentId) && elevatedNodes.has(c.id);
+        // Extract parentId from edge.id format: "edge-{parentId}-{childId}"
+        const edgeParentId = edge.source;
+        const isElevated = hasElevation && elevatedNodes.has(edgeParentId) && elevatedNodes.has(c.id);
         const newZIndex = isElevated ? 999 : undefined;
         const newStrokeWidth = isDimmed ? 1 : (isElevated ? 3 : 2);
         const newOpacity = isDimmed ? 0.2 : (c.order === 1 ? 0.7 : 0.6);
@@ -833,6 +1423,13 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
 
   // ─── Edge rebuild on drag stop ──────────────────────────────────
   const handleNodeDragStop = useCallback((_event: React.MouseEvent, draggedNode: Node) => {
+    // Mark the node as pinned so auto-layout won't reposition it
+    if (draggedNode.id !== 'seed') {
+      existingPositionsRef.current.set(draggedNode.id, { ...draggedNode.position });
+      setConsequences(prev => prev.map(c =>
+        c.id === draggedNode.id ? { ...c, pinned: true } : c
+      ));
+    }
     // Update the pre-focus snapshot so unfocus restores to the post-drag position
     if (preFocusPositionsRef.current) {
       preFocusPositionsRef.current.set(draggedNode.id, { ...draggedNode.position });
@@ -857,7 +1454,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
 
   // ─── Tidy Layout handler ───────────────────────────────────────
   const handleTidyLayout = useCallback(() => {
-    const freshPositions = computeRadialLayout(consequences);
+    const freshPositions = computeRadialLayout(consequences, undefined, true, verbosity);
     resolveCollisions(freshPositions, consequences);
 
     setNodes(prev => prev.map(n => {
@@ -879,7 +1476,8 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
 
   useEffect(() => {
     // Build a lightweight fingerprint of consequences to detect structural changes
-    const fingerprint = consequences.map(c => c.id).sort().join(',');
+    // Include parentIds so edge rebuilds happen when connections change (not just adds/removes)
+    const fingerprint = consequences.map(c => `${c.id}:${c.parentIds.join('+')}`).sort().join(',');
     if (fingerprint !== prevConsequenceJsonRef.current) {
       prevConsequenceJsonRef.current = fingerprint;
       syncGraphStructure();
@@ -915,7 +1513,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     prevEditingRef.current = editingNodeId;
     if (editChanged && editingNodeId) {
       // Small delay so the enlarged edit form has rendered and RF has measured it
-      setTimeout(() => centerOnNode(editingNodeId, 0.7), 80);
+      setTimeout(() => centerOnNode(editingNodeId, 1.0), 80);
     }
   }, [editingNodeId, centerOnNode]);
 
@@ -984,6 +1582,8 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
               isSelected: activeNodeId === 'seed',
               isGeneratingChildren: isGeneratingChildrenFor === 'seed',
               isGenerationInProgress: isGenerationRunning,
+              isConnectValidTarget: !!connectModeSourceId && isValidConnectTarget('seed'),
+              isConnectMode: !!connectModeSourceId,
               onClick: handleSeedClick,
               onAddChild: handleSeedAddChild,
               onGenerateChildren: handleSeedGenerateChildren,
@@ -1029,6 +1629,8 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
               isSelected: activeNodeId === 'seed',
               isGeneratingChildren: isGeneratingChildrenFor === 'seed',
               isGenerationInProgress: isGenerationRunning,
+              isConnectValidTarget: !!connectModeSourceId && isValidConnectTarget('seed'),
+              isConnectMode: !!connectModeSourceId,
               onClick: handleSeedClick,
               onAddChild: handleSeedAddChild,
               onGenerateChildren: handleSeedGenerateChildren,
@@ -1059,7 +1661,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     const runGeneration = async () => {
       if (hasApiKey() && !useMockData) {
         try {
-          const result = await generateComprehensiveFuturescape(input, {
+          const result = await generateComprehensiveFuturescape(effectiveInput, {
             onPhaseStart: (phase: GenerationPhase) => {
               setGenerationPhase(phase as ExtendedPhase);
             },
@@ -1076,7 +1678,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
               setError(err.message);
               // Don't navigate away - just show the error
             },
-          });
+          }, generationConfig);
           // Solutions are now part of consequences array as nodeType: 'solution'|'idea'
           setGenerationPhase('complete');
         } catch (err) {
@@ -1113,34 +1715,77 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     generationStarted.current = false;
   };
 
+  // Shared subject-finding function — used by auto-trigger, retry, and report pipeline
+  const refreshSubjects = useCallback(async (): Promise<RelevantSubject[]> => {
+    setIsLoadingSubjects(true);
+    setRelatedSubjects([]);
+    try {
+      const subjects = await findRelevantSubjects(effectiveInput, consequences);
+      setRelatedSubjects(subjects);
+      subjectsRequested.current = true;
+      subjectsConsequenceCount.current = consequences.length;
+      return subjects;
+    } catch (err) {
+      console.error('Failed to find related subjects:', err);
+      return [];
+    } finally {
+      setIsLoadingSubjects(false);
+    }
+  }, [effectiveInput, consequences]);
+
+  // Returns true if subjects are stale (graph changed since last computation)
+  const areSubjectsStale = useCallback(() => {
+    return !subjectsRequested.current || consequences.length !== subjectsConsequenceCount.current;
+  }, [consequences.length]);
+
   // Find related subjects once generation completes
   useEffect(() => {
     if (generationPhase !== 'complete' || subjectsRequested.current || consequences.length === 0) return;
     if (!hasApiKey()) return; // Need API key for subject matching
-    subjectsRequested.current = true;
-    setIsLoadingSubjects(true);
-
-    findRelevantSubjects(input, consequences)
-      .then(subjects => {
-        setRelatedSubjects(subjects);
-      })
-      .catch(err => {
-        console.error('Failed to find related subjects:', err);
-      })
-      .finally(() => {
-        setIsLoadingSubjects(false);
-      });
-  }, [generationPhase, consequences, input]);
+    refreshSubjects();
+  }, [generationPhase, consequences, input, refreshSubjects]);
 
   const handleRetrySubjects = () => {
-    subjectsRequested.current = false;
-    setRelatedSubjects([]);
-    setIsLoadingSubjects(true);
-    findRelevantSubjects(input, consequences)
-      .then(subjects => setRelatedSubjects(subjects))
-      .catch(err => console.error('Failed to find related subjects:', err))
-      .finally(() => setIsLoadingSubjects(false));
+    refreshSubjects();
   };
+
+  // ── Report generation orchestration ──
+  const handleGenerateReport = useCallback(async () => {
+    if (consequences.length === 0 || !input) return;
+
+    try {
+      // Layer 1: Compute stats + structural insights (instant)
+      setReportPhase('computing-stats');
+      const stats = computeGraphStatistics(consequences, []); // solutions array when available
+      const insights = computeStructuralInsights(consequences, stats);
+
+      // Layer 2: Refresh subjects if stale (or if never run)
+      setReportPhase('linking-subjects');
+      let subjects = relatedSubjects;
+      if (areSubjectsStale()) {
+        subjects = await refreshSubjects();
+      }
+
+      // Layer 3: AI synthesis
+      setReportPhase('synthesizing');
+      const report = await generateReport(
+        effectiveInput,
+        consequences,
+        [], // solutions array when available
+        subjects,
+        stats,
+        insights,
+        (msg) => console.log('[Report]', msg),
+      );
+
+      setReportData(report);
+      setReportPhase('ready');
+      setReportPanelOpen(true);
+    } catch (err) {
+      console.error('Report generation failed:', err);
+      setReportPhase('idle');
+    }
+  }, [consequences, input, effectiveInput, relatedSubjects, areSubjectsStale, refreshSubjects]);
 
   // Highlight filter handlers (for dimming)
   const toggleHighlightCategory = (cat: STEEPCategory) => {
@@ -1195,7 +1840,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     }));
   };
 
-  const resetFilters = () => {
+  const selectAllFilters = () => {
     setHighlightFilters({
       categories: ['social', 'technological', 'economic', 'environmental', 'political', 'ethical'],
       sentiments: ['positive', 'negative', 'neutral'],
@@ -1206,6 +1851,35 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     });
     setShowHighImpact(false);
   };
+
+  const selectNoneFilters = () => {
+    setHighlightFilters({
+      categories: [],
+      sentiments: [],
+      orders: [],
+      probabilities: [],
+      importance: [],
+      showIdeas: false,
+    });
+    setShowHighImpact(false);
+  };
+
+  // Compute whether all or no filters are active (for disabling All/None buttons)
+  const allFiltersSelected =
+    highlightFilters.categories.length === 6 &&
+    highlightFilters.sentiments.length === 3 &&
+    highlightFilters.orders.length === 5 &&
+    highlightFilters.probabilities.length === 4 &&
+    highlightFilters.importance.length === 4 &&
+    highlightFilters.showIdeas;
+
+  const noFiltersSelected =
+    highlightFilters.categories.length === 0 &&
+    highlightFilters.sentiments.length === 0 &&
+    highlightFilters.orders.length === 0 &&
+    highlightFilters.probabilities.length === 0 &&
+    highlightFilters.importance.length === 0 &&
+    !highlightFilters.showIdeas;
 
   // Toggle high-impact filter: only probable/plausible + critical/high
   const toggleHighImpact = () => {
@@ -1271,7 +1945,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     setIsGeneratingIdeas(true);
     try {
       const expandTime = Date.now();
-      const newIdeas = await generateSolutionIdeas(input, targetNode, consequences);
+      const newIdeas = await generateSolutionIdeas(effectiveInput, targetNode, consequences);
       const stamped = newIdeas.map(c => ({ ...c, expandedAt: expandTime }));
       setConsequences(prev => [...prev, ...stamped]);
       setLastExpansionTime(expandTime);
@@ -1292,7 +1966,7 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
     try {
       const expandTime = Date.now();
       const newConsequences = await freePromptExpand(
-        input,
+        effectiveInput,
         consequences,
         promptText.trim(),
         (msg) => setPromptProgress(msg)
@@ -1319,157 +1993,322 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
   const totalPhases = 4;
 
   return (
-    <div className="h-screen flex">
+    <Flex direction="column" h="100vh">
+      {/* Header bar */}
+      <Flex
+        h="40px"
+        px={4}
+        align="center"
+        justify="space-between"
+        bg="bg.canvas"
+        borderBottom="1px solid"
+        borderColor="border.muted"
+        flexShrink={0}
+      >
+        <Text fontSize="xs" fontWeight="semibold" color="fg.muted" letterSpacing="wider" textTransform="uppercase">
+          Futurescaper
+        </Text>
+        <Box
+          as="button"
+          onClick={toggleColorMode}
+          p={1.5}
+          rounded="md"
+          color="fg.muted"
+          _hover={{ color: 'fg', bg: 'bg.hover' }}
+          transition="all 0.15s"
+          title={colorMode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+        >
+          {colorMode === 'light' ? <Moon style={{ width: 14, height: 14 }} /> : <Sun style={{ width: 14, height: 14 }} />}
+        </Box>
+      </Flex>
+
+      {/* Existing content */}
+      <Flex flex={1} minH={0}>
       {/* Left sidebar */}
-      <div className="w-80 bg-white border-r border-slate-200 flex flex-col overflow-y-auto">
-        <div className="p-4 border-b border-slate-200">
-          <button
+      <Flex direction="column" flexShrink={0} p={3} pr={0}>
+      <Flex
+        w="300px"
+        bg="bg.canvas"
+        borderWidth="1px"
+        borderColor="border.emphasized"
+        rounded="xl"
+        direction="column"
+        overflowY="auto"
+        overflowX="hidden"
+        h="100%"
+        opacity={reportPhase !== 'idle' && reportPhase !== 'ready' ? 0.4 : 1}
+        pointerEvents={reportPhase !== 'idle' && reportPhase !== 'ready' ? 'none' : 'auto'}
+        transition="opacity 0.3s"
+      >
+        <Box p={4} borderBottom="1px solid" borderColor="border.muted">
+          <Flex
+            as="button"
             onClick={onBack}
-            className="flex items-center gap-2 text-slate-600 hover:text-slate-900 mb-4"
+            align="center"
+            gap={2}
+            color="fg.secondary"
+            _hover={{ color: 'fg' }}
+            mb={4}
           >
-            <ArrowLeft className="w-4 h-4" />
+            <ArrowLeft style={{ width: 16, height: 16 }} />
             Back
-          </button>
-          <h2 className="font-bold text-slate-900 mb-1">{input.title}</h2>
-          <p className="text-sm text-slate-600 max-h-32 overflow-y-auto">{input.description}</p>
-        </div>
+          </Flex>
+          <Text fontWeight="bold" color="fg" mb={1} fontFamily="heading">{input.title}</Text>
+          <Text fontSize="sm" color="fg.secondary" maxH="128px" overflowY="auto">{input.description}</Text>
+        </Box>
+
+        {/* Generate Futurescape Report */}
+        {consequences.length > 0 && hasApiKey() && (
+          <Box px={4} py={3} borderBottom="1px solid" borderColor="border.muted">
+            <Button
+              onClick={reportPhase === 'ready' ? () => setReportPanelOpen(true) : handleGenerateReport}
+              disabled={reportPhase !== 'idle' && reportPhase !== 'ready'}
+              w="full"
+              size="sm"
+              fontFamily="heading"
+              fontWeight={600}
+              fontSize="13px"
+              gap={2}
+              bg="brand.500"
+              color="white"
+              _hover={{ bg: 'brand.600' }}
+              _disabled={{ opacity: 0.7, cursor: 'not-allowed' }}
+            >
+              {reportPhase === 'idle' || reportPhase === 'ready' ? (
+                <>
+                  <Box as={FileText} w={4} h={4} />
+                  {reportPhase === 'ready' ? 'View Futurescape Report' : 'Generate Futurescape Report'}
+                </>
+              ) : (
+                <>
+                  <Box as={Loader2} w={4} h={4} className="animate-spin" />
+                  {reportPhase === 'computing-stats' && 'Computing statistics...'}
+                  {reportPhase === 'linking-subjects' && 'Linking subjects...'}
+                  {reportPhase === 'synthesizing' && 'Writing report...'}
+                </>
+              )}
+            </Button>
+            {reportPhase === 'ready' && (
+              <Text
+                as="button"
+                onClick={handleGenerateReport}
+                display="block"
+                w="full"
+                textAlign="center"
+                mt={1.5}
+                fontSize="xs"
+                color="fg.muted"
+                _hover={{ color: 'fg' }}
+                cursor="pointer"
+              >
+                Regenerate
+              </Text>
+            )}
+          </Box>
+        )}
+
+        {/* Verbosity Toggle */}
+        <Box p={4} borderBottom="1px solid" borderColor="border.muted">
+          <Text fontSize="xs" fontWeight="semibold" color="fg.muted" mb={2}>AI Output Style (Node Generation)</Text>
+          <Flex gap={1}>
+            {(['concise', 'detailed'] as const).map((v) => (
+              <Box
+                key={v}
+                as="button"
+                onClick={() => setVerbosity(v)}
+                flex={1}
+                py={1}
+                px={2}
+                rounded="md"
+                borderWidth="1px"
+                textAlign="center"
+                fontSize="xs"
+                fontWeight={verbosity === v ? 'semibold' : 'normal'}
+                cursor="pointer"
+                transition="all 0.15s"
+                borderColor={verbosity === v ? 'fg' : 'border.muted'}
+                bg={verbosity === v ? 'fg' : 'transparent'}
+                color={verbosity === v ? 'bg.canvas' : 'fg.muted'}
+                _hover={verbosity !== v ? { bg: 'bg.hover' } : undefined}
+              >
+                {v.charAt(0).toUpperCase() + v.slice(1)}
+              </Box>
+            ))}
+          </Flex>
+        </Box>
 
         {error && (
-          <div className="p-4 bg-red-50 border-b border-red-200">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
-              <div>
-                <h3 className="font-semibold text-red-900">Generation Error</h3>
-                <p className="text-sm text-red-700 mt-1">{error}</p>
-                <div className="flex gap-2 mt-3">
+          <Box p={4} bg="error/8" borderBottom="1px solid" borderColor="error/20">
+            <Flex align="start" gap={3}>
+              <Box as={AlertCircle} w="20px" h="20px" color="fg.error" flexShrink={0} mt="2px" />
+              <Box>
+                <Text fontWeight="semibold" color="fg.error">Generation Error</Text>
+                <Text fontSize="sm" color="fg.error" mt={1}>{error}</Text>
+                <Flex gap={2} mt={3}>
                   {(error.toLowerCase().includes('api key') ||
                     error.toLowerCase().includes('authentication') ||
                     error.toLowerCase().includes('invalid') ||
                     error.toLowerCase().includes('401') ||
                     error.toLowerCase().includes('unauthorized')) && onApiError && (
-                    <button
+                    <Button
                       onClick={onApiError}
-                      className="px-3 py-1.5 text-sm bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors"
+                      size="sm"
+                      bg="warning"
+                      color="brand.contrast"
+                      rounded="lg"
+                      _hover={{ opacity: 0.9 }}
                     >
                       Change API Key
-                    </button>
+                    </Button>
                   )}
-                  <button
+                  <Button
                     onClick={handleRetryWithMock}
-                    className="px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+                    size="sm"
+                    bg="fg.error"
+                    color="brand.contrast"
+                    rounded="lg"
+                    _hover={{ opacity: 0.9 }}
                   >
                     Use Demo Mode
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
+                  </Button>
+                </Flex>
+              </Box>
+            </Flex>
+          </Box>
         )}
 
         {/* Generation Progress */}
-        <div className="p-4 border-b border-slate-200">
+        <Box p={4} borderBottom="1px solid" borderColor="border.muted">
           {manualMode ? (
-            <div className="flex items-center gap-2 text-sm text-slate-600">
-              <Hammer className="w-4 h-4 text-slate-500" />
-              <div>
-                <span className="font-semibold text-slate-700">Manual Mode</span>
-                <p className="text-xs text-slate-500 mt-1">Click the seed node to add children or AI-generate consequences. Click any node for more actions.</p>
-              </div>
-            </div>
+            <Flex align="center" gap={2} fontSize="sm" color="fg.secondary">
+              <Box as={Hammer} w="16px" h="16px" color="fg.muted" />
+              <Box>
+                <Text fontWeight="semibold" color="fg.secondary" fontFamily="heading">Manual Mode</Text>
+                <Text fontSize="xs" color="fg.muted" mt={1}>Click the seed node to add children or AI-generate consequences. Click any node for more actions.</Text>
+              </Box>
+            </Flex>
           ) : (
             <>
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-semibold text-slate-700">Generation Progress</span>
-                <span className="text-xs text-slate-500">
+              <Flex align="center" justify="space-between" mb={2}>
+                <Text fontSize="sm" fontWeight="semibold" color="fg.secondary" fontFamily="heading">Generation Progress</Text>
+                <Text fontSize="xs" color="fg.muted">
                   {generationPhase === 'complete' ? `${totalPhases}/${totalPhases}` : `${getPhaseNumber(generationPhase)}/${totalPhases}`}
-                </span>
-              </div>
-              <div className="w-full bg-slate-200 rounded-full h-2 mb-2 overflow-hidden">
-                <div
-                  className="bg-seed h-2 rounded-full transition-all duration-500"
+                </Text>
+              </Flex>
+              <Box w="100%" bg="bg.active" rounded="full" h="8px" mb={2} overflow="hidden">
+                <Box
+                  bg="brand"
+                  h="8px"
+                  rounded="full"
+                  transition="all 0.5s"
                   style={{ width: `${Math.min((getPhaseNumber(generationPhase) / totalPhases) * 100, 100)}%` }}
                 />
-              </div>
-              <div className="text-xs text-slate-500">
+              </Box>
+              <Box fontSize="xs" color="fg.muted">
                 {generationPhase === 'complete' ? (
-                  <span className="text-green-600 font-medium">✓ Analysis complete ({stats.total} consequences)</span>
+                  <Text as="span" color="fg" fontWeight="medium">Analysis complete ({stats.total} consequences)</Text>
                 ) : (
                   progressMessage || `Analyzing ${generationPhase}...`
                 )}
-              </div>
+              </Box>
             </>
           )}
-        </div>
+        </Box>
 
         {/* TLDR Summary */}
         {tldrSummary && generationPhase === 'complete' && (
-          <div className="p-4 border-b border-slate-200">
-            <button
+          <Box p={4} borderBottom="1px solid" borderColor="border.muted">
+            <Flex
+              as="button"
               onClick={() => setShowTLDR(!showTLDR)}
-              className="flex items-center gap-2 w-full text-left mb-2"
+              align="center"
+              gap={2}
+              w="100%"
+              textAlign="left"
+              mb={2}
             >
-              <FileText className="w-4 h-4 text-seed" />
-              <span className="text-sm font-semibold text-slate-700">TL;DR Summary</span>
-              <span className="ml-auto text-xs text-slate-400">{showTLDR ? '▼' : '▶'}</span>
-            </button>
+              <Box as={FileText} w="16px" h="16px" color="brand" />
+              <Text fontSize="sm" fontWeight="semibold" color="fg.secondary" fontFamily="heading">TL;DR Summary</Text>
+              <Text ml="auto" fontSize="xs" color="fg.muted">{showTLDR ? '▼' : '▶'}</Text>
+            </Flex>
             {showTLDR && (
-              <div className="space-y-3 text-sm">
-                <div className="bg-slate-50 rounded-lg p-3">
-                  <p className="text-slate-700 mb-2">
+              <Flex direction="column" gap={3} fontSize="sm">
+                <Box bg="bg.hover" rounded="lg" p={3}>
+                  <Text color="fg.secondary" mb={2}>
                     <strong>{tldrSummary.totalConsequences}</strong> consequences identified:
-                    {' '}<span className="text-red-600">{tldrSummary.negativePercent}% concerning</span>,
-                    {' '}<span className="text-green-600">{tldrSummary.positivePercent}% positive</span>
+                    {' '}<Text as="span" color="fg.error">{tldrSummary.negativePercent}% concerning</Text>,
+                    {' '}<Text as="span" color="fg.success">{tldrSummary.positivePercent}% positive</Text>
                     {tldrSummary.criticalCount > 0 && (
-                      <span className="text-amber-600"> ({tldrSummary.criticalCount} critical)</span>
+                      <Text as="span" color="warning"> ({tldrSummary.criticalCount} critical)</Text>
                     )}
-                  </p>
+                  </Text>
                   {tldrSummary.dominantCategory && (
-                    <p className="text-slate-600 text-xs">
-                      Primary impact area: <span className="font-medium">{STEEP_LABELS[tldrSummary.dominantCategory]}</span>
-                    </p>
+                    <Text color="fg.secondary" fontSize="xs">
+                      Primary impact area: <Text as="span" fontWeight="medium">{STEEP_LABELS[tldrSummary.dominantCategory]}</Text>
+                    </Text>
                   )}
-                </div>
+                </Box>
 
                 {tldrSummary.topConcerns.length > 0 && (
-                  <div>
-                    <h4 className="text-xs font-semibold text-red-700 mb-1.5 flex items-center gap-1">
-                      <TrendingDown className="w-3 h-3" /> Top Concerns
-                    </h4>
-                    <ul className="space-y-2">
+                  <Box>
+                    <Flex as="h4" fontSize="xs" fontWeight="semibold" color="fg.error" mb="6px" align="center" gap={1}>
+                      <TrendingDown style={{ width: 12, height: 12 }} /> Top Concerns
+                    </Flex>
+                    <Flex direction="column" gap={2}>
                       {tldrSummary.topConcerns.map((c) => (
-                        <li
+                        <Box
+                          as="li"
                           key={c.id}
                           onClick={() => setActiveNodeId(c.id)}
-                          className="text-xs text-slate-600 pl-3 border-l-2 border-red-200 leading-relaxed cursor-pointer hover:text-slate-900 hover:border-red-400 transition-colors"
+                          fontSize="xs"
+                          color="fg.secondary"
+                          pl={3}
+                          borderLeft="2px solid"
+                          borderColor="error/20"
+                          lineHeight="relaxed"
+                          cursor="pointer"
+                          _hover={{ color: 'fg', borderColor: 'fg.error' }}
+                          transition="colors"
+                          listStyleType="none"
                         >
                           {c.text}
-                        </li>
+                        </Box>
                       ))}
-                    </ul>
-                  </div>
+                    </Flex>
+                  </Box>
                 )}
 
                 {tldrSummary.topOpportunities.length > 0 && (
-                  <div>
-                    <h4 className="text-xs font-semibold text-green-700 mb-1.5 flex items-center gap-1">
-                      <TrendingUp className="w-3 h-3" /> Top Opportunities
-                    </h4>
-                    <ul className="space-y-2">
+                  <Box>
+                    <Flex as="h4" fontSize="xs" fontWeight="semibold" color="fg.success" mb="6px" align="center" gap={1}>
+                      <TrendingUp style={{ width: 12, height: 12 }} /> Top Opportunities
+                    </Flex>
+                    <Flex direction="column" gap={2}>
                       {tldrSummary.topOpportunities.map((c) => (
-                        <li
+                        <Box
+                          as="li"
                           key={c.id}
                           onClick={() => setActiveNodeId(c.id)}
-                          className="text-xs text-slate-600 pl-3 border-l-2 border-green-200 leading-relaxed cursor-pointer hover:text-slate-900 hover:border-green-400 transition-colors"
+                          fontSize="xs"
+                          color="fg.secondary"
+                          pl={3}
+                          borderLeft="2px solid"
+                          borderColor="fg.success"
+                          lineHeight="relaxed"
+                          cursor="pointer"
+                          _hover={{ color: 'fg', borderColor: 'fg.success' }}
+                          transition="colors"
+                          listStyleType="none"
                         >
                           {c.text}
-                        </li>
+                        </Box>
                       ))}
-                    </ul>
-                  </div>
+                    </Flex>
+                  </Box>
                 )}
-              </div>
+              </Flex>
             )}
-          </div>
+          </Box>
         )}
 
         {/* Related Subjects Panel */}
@@ -1480,18 +2319,35 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
         />
 
         <ExportPanel consequences={consequences} input={input} solutions={[]} />
-      </div>
+
+        {/* Save to Cloud */}
+        <SaveToCloudButton
+          input={input}
+          consequences={consequences}
+          solutions={[]}
+          reportData={reportData}
+          reactFlowInstance={reactFlowInstanceRef.current}
+          mapContainerRef={mapContainerRef}
+          colorMode={colorMode as 'light' | 'dark'}
+          toggleColorMode={toggleColorMode}
+        />
+      </Flex>
+      </Flex>
 
       {/* Main map area */}
-      <div ref={mapContainerRef} className={`flex-1 relative ${focusAnimClass} ${activeNodeId && activeNodeId !== 'seed' ? 'has-focus-path' : ''}`}>
+      <Box ref={mapContainerRef} flex={1} position="relative" bg="bg" className={`${focusAnimClass} ${activeNodeId && activeNodeId !== 'seed' ? 'has-focus-path' : ''}`}>
         <ReactFlow
           nodes={nodes}
           edges={edges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
           connectionMode={ConnectionMode.Loose}
+          nodesConnectable={false}
+          onEdgeClick={handleEdgeClick}
           onPaneClick={handlePaneClick}
+          onPaneContextMenu={handlePaneContextMenu}
           onNodeDragStop={handleNodeDragStop}
           onInit={(instance) => { reactFlowInstanceRef.current = instance; }}
           fitView
@@ -1499,35 +2355,65 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
           minZoom={0.1}
           maxZoom={2}
           defaultEdgeOptions={{
-            type: 'default',
-            style: { strokeLinecap: 'round', strokeLinejoin: 'round' },
+            type: 'straightApproach',
           }}
         >
-          <Background color="#e8e8f0" gap={20} />
+          <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="var(--chakra-colors-border-muted, #F0F0F0)" />
           <Controls />
 
           {/* Tidy Layout button */}
           {generationPhase === 'complete' && consequences.length > 0 && (
-            <div className={`absolute top-4 z-10 ${filterPanelCollapsed ? 'right-16' : 'right-[236px]'}`} style={{ transition: 'right 0.2s ease' }}>
-              <button
+            <Box
+              position="absolute"
+              top={4}
+              zIndex={10}
+              right={filterPanelCollapsed ? '64px' : '236px'}
+              style={{ transition: 'right 0.2s ease' }}
+            >
+              <Flex
+                as="button"
                 onClick={handleTidyLayout}
-                className="flex items-center gap-1.5 px-3 py-2 bg-white/95 backdrop-blur-sm rounded-lg shadow-md border border-slate-200 text-xs font-medium text-slate-600 hover:text-slate-900 hover:border-slate-300 transition-colors"
+                align="center"
+                gap="6px"
+                px={3}
+                py={2}
+                bg="bg.muted"
+                backdropFilter="blur(8px)"
+                rounded="lg"
+                shadow="md"
+                border="1px solid"
+                borderColor="border.muted"
+                fontSize="xs"
+                fontWeight="medium"
+                color="fg.secondary"
+                _hover={{ color: 'fg', borderColor: 'border' }}
+                transition="colors"
                 title="Reset layout to clean radial arrangement"
               >
-                <LayoutGrid className="w-3.5 h-3.5" />
+                <LayoutGrid style={{ width: 14, height: 14 }} />
                 Tidy Layout
-              </button>
-            </div>
+              </Flex>
+            </Box>
           )}
 
           {/* ─── Filter Panel (right side of map) ─── */}
           {consequences.length > 0 && (
-            <div
-              className="absolute top-0 right-0 bottom-0 z-10 flex"
+            <Flex
+              position="absolute"
+              top={3}
+              right={3}
+              bottom={3}
+              zIndex={10}
               style={{ pointerEvents: 'none' }}
             >
-              <div
-                className="h-full bg-white shadow-lg border-l border-slate-200 overflow-y-auto"
+              <Box
+                h="100%"
+                bg="bg.canvas"
+                shadow="lg"
+                borderWidth="1px"
+                borderColor="border.emphasized"
+                rounded="xl"
+                overflowY="auto"
                 style={{
                   width: filterPanelCollapsed ? '44px' : '240px',
                   transition: 'width 0.2s ease',
@@ -1535,307 +2421,719 @@ export function FuturescapeMap({ input, onBack, onApiError, importedData, manual
                 }}
               >
                 {/* Collapse toggle */}
-                <div className="sticky top-0 bg-white z-10 border-b border-slate-100">
-                  <button
+                <Box position="sticky" top={0} bg="bg.canvas" zIndex={10} borderBottom="1px solid" borderColor="border.muted" roundedTop="xl">
+                  <Flex
+                    as="button"
                     onClick={() => setFilterPanelCollapsed(prev => !prev)}
-                    className="w-full flex items-center gap-2 px-3 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
+                    w="100%"
+                    align="center"
+                    gap={2}
+                    px={3}
+                    py="10px"
+                    fontSize="xs"
+                    fontWeight="semibold"
+                    color="fg.secondary"
+                    _hover={{ bg: 'bg.hover' }}
+                    transition="colors"
                     title={filterPanelCollapsed ? 'Expand filters' : 'Collapse filters'}
                   >
-                    <Filter className="w-3.5 h-3.5 flex-shrink-0" />
+                    <Filter style={{ width: 14, height: 14, flexShrink: 0 }} />
                     {!filterPanelCollapsed && (
                       <>
-                        <span className="flex-1 text-left">Filters</span>
-                        <ChevronRight className="w-3.5 h-3.5" />
+                        <Text flex={1} textAlign="left">Filters</Text>
+                        <ChevronRight style={{ width: 14, height: 14 }} />
                       </>
                     )}
-                  </button>
-                </div>
+                  </Flex>
+                </Box>
 
                 {filterPanelCollapsed ? (
                   /* ── Collapsed: icon strip ── */
-                  <div className="flex flex-col items-center gap-1 py-2">
-                    <button onClick={() => setFilterPanelCollapsed(false)} className="p-1.5 rounded-md hover:bg-slate-100 text-slate-500" title="Category"><Layers className="w-4 h-4" /></button>
-                    <button onClick={() => setFilterPanelCollapsed(false)} className="p-1.5 rounded-md hover:bg-slate-100 text-slate-500" title="Sentiment"><TrendingUp className="w-4 h-4" /></button>
-                    <button onClick={() => setFilterPanelCollapsed(false)} className="p-1.5 rounded-md hover:bg-slate-100 text-slate-500" title="Probability"><Target className="w-4 h-4" /></button>
-                    <button onClick={() => setFilterPanelCollapsed(false)} className="p-1.5 rounded-md hover:bg-slate-100 text-slate-500" title="Importance"><Star className="w-4 h-4" /></button>
-                    <div className="w-6 border-t border-slate-200 my-1" />
-                    <button onClick={resetFilters} className="p-1.5 rounded-md hover:bg-slate-100 text-slate-400" title="Reset filters"><X className="w-4 h-4" /></button>
-                  </div>
+                  <Flex direction="column" align="center" gap={1} py={2}>
+                    <Box as="button" onClick={() => setFilterPanelCollapsed(false)} p="6px" rounded="md" _hover={{ bg: 'bg.hover' }} color="fg.muted" title="Category"><Layers style={{ width: 16, height: 16 }} /></Box>
+                    <Box as="button" onClick={() => setFilterPanelCollapsed(false)} p="6px" rounded="md" _hover={{ bg: 'bg.hover' }} color="fg.muted" title="Sentiment"><TrendingUp style={{ width: 16, height: 16 }} /></Box>
+                    <Box as="button" onClick={() => setFilterPanelCollapsed(false)} p="6px" rounded="md" _hover={{ bg: 'bg.hover' }} color="fg.muted" title="Probability"><Target style={{ width: 16, height: 16 }} /></Box>
+                    <Box as="button" onClick={() => setFilterPanelCollapsed(false)} p="6px" rounded="md" _hover={{ bg: 'bg.hover' }} color="fg.muted" title="Importance"><Star style={{ width: 16, height: 16 }} /></Box>
+                    <Box w="24px" borderTop="1px solid" borderColor="border.muted" my={1} />
+                    <Box as="button" onClick={selectAllFilters} p="6px" rounded="md" _hover={allFiltersSelected ? {} : { bg: 'bg.hover' }} color="fg.muted" title="Show all" style={allFiltersSelected ? { opacity: 0.3, cursor: 'default' } : {}} disabled={allFiltersSelected}><Eye style={{ width: 16, height: 16 }} /></Box>
+                    <Box as="button" onClick={selectNoneFilters} p="6px" rounded="md" _hover={noFiltersSelected ? {} : { bg: 'bg.hover' }} color="fg.muted" title="Hide all" style={noFiltersSelected ? { opacity: 0.3, cursor: 'default' } : {}} disabled={noFiltersSelected}><EyeOff style={{ width: 16, height: 16 }} /></Box>
+                  </Flex>
                 ) : (
                   /* ── Expanded: full filters ── */
-                  <div className="px-3 py-2 space-y-3">
+                  <Flex direction="column" gap={3} px={3} py={2}>
                     {/* Quick actions */}
-                    <div className="flex items-center gap-1.5">
-                      <button
+                    <Flex align="center" gap="6px">
+                      <Flex
+                        as="button"
                         onClick={toggleHighImpact}
-                        className={`flex items-center gap-1 px-2 py-1 text-[10px] rounded-md transition-colors flex-1 justify-center ${
-                          showHighImpact
-                            ? 'bg-orange-100 text-orange-600 border border-orange-300'
-                            : 'bg-slate-50 text-slate-500 hover:text-slate-700 border border-slate-200'
-                        }`}
+                        align="center"
+                        gap={1}
+                        px={2}
+                        py={1}
+                        fontSize="10px"
+                        rounded="md"
+                        transition="colors"
+                        flex={1}
+                        justify="center"
+                        bg={showHighImpact ? 'brand/12' : 'transparent'}
+                        color={showHighImpact ? 'fg' : 'fg.muted'}
+                        fontWeight={showHighImpact ? 'semibold' : 'normal'}
+                        border="1px solid"
+                        borderColor={showHighImpact ? 'brand/40' : 'border.muted'}
                       >
-                        <Zap className="w-3 h-3" /> Key Only
-                      </button>
-                      <button
-                        onClick={resetFilters}
-                        className="px-2 py-1 text-[10px] text-slate-500 hover:text-slate-700 bg-slate-50 border border-slate-200 rounded-md"
+                        <Zap style={{ width: 12, height: 12 }} /> Key Only
+                      </Flex>
+                      <Flex
+                        align="center"
+                        gap={0}
+                        border="1px solid"
+                        borderColor="border.muted"
+                        rounded="md"
+                        overflow="hidden"
                       >
-                        Reset
-                      </button>
-                    </div>
+                        <Box
+                          as="button"
+                          onClick={selectAllFilters}
+                          px={2}
+                          py={1}
+                          fontSize="10px"
+                          color={allFiltersSelected ? 'fg.muted' : 'fg.secondary'}
+                          fontWeight={allFiltersSelected ? 'normal' : 'medium'}
+                          bg="transparent"
+                          _hover={allFiltersSelected ? {} : { bg: 'bg.hover' }}
+                          style={allFiltersSelected ? { cursor: 'default', opacity: 0.4 } : { cursor: 'pointer' }}
+                          disabled={allFiltersSelected}
+                        >
+                          All
+                        </Box>
+                        <Box w="1px" alignSelf="stretch" bg="border.muted" />
+                        <Box
+                          as="button"
+                          onClick={selectNoneFilters}
+                          px={2}
+                          py={1}
+                          fontSize="10px"
+                          color={noFiltersSelected ? 'fg.muted' : 'fg.secondary'}
+                          fontWeight={noFiltersSelected ? 'normal' : 'medium'}
+                          bg="transparent"
+                          _hover={noFiltersSelected ? {} : { bg: 'bg.hover' }}
+                          style={noFiltersSelected ? { cursor: 'default', opacity: 0.4 } : { cursor: 'pointer' }}
+                          disabled={noFiltersSelected}
+                        >
+                          None
+                        </Box>
+                      </Flex>
+                    </Flex>
 
                     {/* STEEP Category */}
-                    <div>
-                      <span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium mb-1.5 flex items-center gap-1">
-                        <Layers className="w-3 h-3" /> Category
-                      </span>
-                      <div className="flex flex-col gap-1">
-                        {(['social', 'technological', 'economic', 'environmental', 'political', 'ethical'] as STEEPCategory[]).map((cat) => (
-                          <button
-                            key={cat}
-                            onClick={() => toggleHighlightCategory(cat)}
-                            className={`w-full px-2 py-1 text-[10px] rounded transition-colors text-left flex items-center justify-between ${
-                              highlightFilters.categories.includes(cat) ? 'border' : 'bg-slate-50 text-slate-400 border border-slate-200'
-                            }`}
-                            style={highlightFilters.categories.includes(cat) ? {
-                              backgroundColor: `${STEEP_COLORS[cat]}20`,
-                              borderColor: STEEP_COLORS[cat],
-                              color: STEEP_COLORS[cat],
-                            } : {}}
-                          >
-                            {STEEP_LABELS[cat]} <span className="opacity-60">({stats.byCategory[cat] || 0})</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                    <Box>
+                      <Flex as="span" fontSize="10px" color="fg.muted" textTransform="uppercase" letterSpacing="wider" fontWeight="medium" mb="6px" align="center" gap={1}>
+                        <Layers style={{ width: 12, height: 12 }} /> Category
+                      </Flex>
+                      <Flex direction="column" gap={1}>
+                        {(['social', 'technological', 'economic', 'environmental', 'political', 'ethical'] as STEEPCategory[]).map((cat) => {
+                          const isActive = highlightFilters.categories.includes(cat);
+                          const isDark = colorMode === 'dark';
+                          return (
+                            <Flex
+                              as="button"
+                              key={cat}
+                              onClick={() => toggleHighlightCategory(cat)}
+                              w="100%"
+                              px={2}
+                              py={1}
+                              fontSize="10px"
+                              rounded="sm"
+                              transition="all 0.15s"
+                              textAlign="left"
+                              align="center"
+                              justify="space-between"
+                              gap={1}
+                              style={isActive ? { backgroundColor: getSteepMutedBg(cat, isDark), color: getSteepTextColor(cat, isDark) } : {}}
+                              color={isActive ? undefined : 'fg.muted'}
+                              fontWeight={isActive ? 'semibold' : 'normal'}
+                              border="1px solid"
+                              borderColor={isActive ? 'transparent' : 'border.muted'}
+                            >
+                              <Flex align="center" gap={1}>
+                                <SteepIcon category={cat} size={11} />
+                                {STEEP_LABELS[cat]}
+                              </Flex>
+                              <Text as="span" opacity={0.6}>({stats.byCategory[cat] || 0})</Text>
+                            </Flex>
+                          );
+                        })}
+                      </Flex>
+                    </Box>
 
                     {/* Sentiment */}
-                    <div>
-                      <span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium mb-1.5 flex items-center gap-1">
+                    <Box>
+                      <Flex as="span" fontSize="10px" color="fg.muted" textTransform="uppercase" letterSpacing="wider" fontWeight="medium" mb="6px" align="center" gap={1}>
                         Sentiment
-                      </span>
-                      <div className="flex flex-col gap-1">
-                        <button
-                          onClick={() => toggleHighlightSentiment('positive')}
-                          className={`w-full px-2 py-1 text-[10px] rounded flex items-center gap-1.5 transition-colors border text-left ${
-                            highlightFilters.sentiments.includes('positive') ? '' : 'bg-slate-50 text-slate-400 border-slate-200'
-                          }`}
-                          style={highlightFilters.sentiments.includes('positive') ? { backgroundColor: '#e6fff5', borderColor: '#00d4aa', color: '#0a6847' } : {}}
-                        >
-                          <TrendingUp className="w-2.5 h-2.5 flex-shrink-0" /> <span className="flex-1">Positive</span> <span className="opacity-60">({stats.bySentiment.positive})</span>
-                        </button>
-                        <button
-                          onClick={() => toggleHighlightSentiment('negative')}
-                          className={`w-full px-2 py-1 text-[10px] rounded flex items-center gap-1.5 transition-colors border text-left ${
-                            highlightFilters.sentiments.includes('negative') ? '' : 'bg-slate-50 text-slate-400 border-slate-200'
-                          }`}
-                          style={highlightFilters.sentiments.includes('negative') ? { backgroundColor: '#fff0f3', borderColor: '#ff4d6d', color: '#a4133c' } : {}}
-                        >
-                          <TrendingDown className="w-2.5 h-2.5 flex-shrink-0" /> <span className="flex-1">Negative</span> <span className="opacity-60">({stats.bySentiment.negative})</span>
-                        </button>
-                        <button
-                          onClick={() => toggleHighlightSentiment('neutral')}
-                          className={`w-full px-2 py-1 text-[10px] rounded flex items-center gap-1.5 transition-colors text-left ${
-                            highlightFilters.sentiments.includes('neutral')
-                              ? 'bg-slate-200 text-slate-700 border border-slate-400'
-                              : 'bg-slate-50 text-slate-400 border border-slate-200'
-                          }`}
-                        >
-                          <Minus className="w-2.5 h-2.5 flex-shrink-0" /> <span className="flex-1">Neutral</span> <span className="opacity-60">({stats.bySentiment.neutral})</span>
-                        </button>
-                      </div>
-                    </div>
+                      </Flex>
+                      <Flex direction="column" gap={1}>
+                        {(['positive', 'negative', 'neutral'] as Sentiment[]).map((sent) => (
+                          <Flex
+                            as="button"
+                            key={sent}
+                            onClick={() => toggleHighlightSentiment(sent)}
+                            w="100%"
+                            px={2}
+                            py={1}
+                            fontSize="10px"
+                            rounded="sm"
+                            align="center"
+                            gap="6px"
+                            transition="colors"
+                            border="1px solid"
+                            textAlign="left"
+                            bg={highlightFilters.sentiments.includes(sent) ? 'brand/12' : 'transparent'}
+                            color={highlightFilters.sentiments.includes(sent) ? 'fg' : 'fg.muted'}
+                            fontWeight={highlightFilters.sentiments.includes(sent) ? 'semibold' : 'normal'}
+                            borderColor={highlightFilters.sentiments.includes(sent) ? 'brand/40' : 'border.muted'}
+                          >
+                            <Text fontSize="sm">{SENTIMENT_SYMBOLS[sent]}</Text> <Text flex={1} textTransform="capitalize">{sent}</Text> <Text as="span" opacity={0.6}>({stats.bySentiment[sent]})</Text>
+                          </Flex>
+                        ))}
+                      </Flex>
+                    </Box>
 
                     {/* Probability */}
-                    <div>
-                      <span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium mb-1.5 flex items-center gap-1">
-                        <Target className="w-3 h-3" /> Probability
-                      </span>
-                      <div className="flex flex-col gap-1">
+                    <Box>
+                      <Flex as="span" fontSize="10px" color="fg.muted" textTransform="uppercase" letterSpacing="wider" fontWeight="medium" mb="6px" align="center" gap={1}>
+                        <Target style={{ width: 12, height: 12 }} /> Probability
+                      </Flex>
+                      <Flex direction="column" gap={1}>
                         {(['probable', 'plausible', 'possible', 'wildcard'] as Probability[]).map((prob) => (
-                          <button
+                          <Flex
+                            as="button"
                             key={prob}
                             onClick={() => toggleHighlightProbability(prob)}
-                            className={`w-full px-2 py-1 text-[10px] rounded transition-colors text-left flex items-center justify-between ${
-                              highlightFilters.probabilities.includes(prob) ? 'border' : 'bg-slate-50 text-slate-400 border border-slate-200'
-                            }`}
-                            style={highlightFilters.probabilities.includes(prob) ? {
-                              backgroundColor: `${PROBABILITY_COLORS[prob]}20`,
-                              borderColor: PROBABILITY_COLORS[prob],
-                              color: PROBABILITY_COLORS[prob],
-                            } : {}}
+                            w="100%"
+                            px={2}
+                            py={1}
+                            fontSize="10px"
+                            rounded="sm"
+                            transition="colors"
+                            textAlign="left"
+                            align="center"
+                            justify="space-between"
+                            bg={highlightFilters.probabilities.includes(prob) ? 'brand/12' : 'transparent'}
+                            color={highlightFilters.probabilities.includes(prob) ? 'fg' : 'fg.muted'}
+                            fontWeight={highlightFilters.probabilities.includes(prob) ? 'semibold' : 'normal'}
+                            border="1px solid"
+                            borderColor={highlightFilters.probabilities.includes(prob) ? 'brand/40' : 'border.muted'}
                           >
-                            <span className="capitalize">{prob}</span> <span className="opacity-60">({stats.byProbability[prob] || 0})</span>
-                          </button>
+                            <Text textTransform="capitalize">{prob}</Text> <Text as="span" opacity={0.6}>({stats.byProbability[prob] || 0})</Text>
+                          </Flex>
                         ))}
-                      </div>
-                    </div>
+                      </Flex>
+                    </Box>
 
                     {/* Importance */}
-                    <div>
-                      <span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium mb-1.5 flex items-center gap-1">
-                        <Star className="w-3 h-3" /> Importance
-                      </span>
-                      <div className="flex flex-col gap-1">
+                    <Box>
+                      <Flex as="span" fontSize="10px" color="fg.muted" textTransform="uppercase" letterSpacing="wider" fontWeight="medium" mb="6px" align="center" gap={1}>
+                        <Star style={{ width: 12, height: 12 }} /> Importance
+                      </Flex>
+                      <Flex direction="column" gap={1}>
                         {(['critical', 'high', 'medium', 'low'] as Importance[]).map((imp) => (
-                          <button
+                          <Flex
+                            as="button"
                             key={imp}
                             onClick={() => toggleHighlightImportance(imp)}
-                            className={`w-full px-2 py-1 text-[10px] rounded transition-colors text-left flex items-center justify-between ${
-                              highlightFilters.importance.includes(imp)
-                                ? imp === 'critical' ? 'bg-amber-100 text-amber-700 border border-amber-300'
-                                  : imp === 'high' ? 'bg-blue-100 text-blue-700 border border-blue-300'
-                                  : 'bg-slate-200 text-slate-700 border border-slate-300'
-                                : 'bg-slate-50 text-slate-400 border border-slate-200'
-                            }`}
+                            w="100%"
+                            px={2}
+                            py={1}
+                            fontSize="10px"
+                            rounded="sm"
+                            transition="colors"
+                            textAlign="left"
+                            align="center"
+                            justify="space-between"
+                            bg={highlightFilters.importance.includes(imp) ? 'brand/12' : 'transparent'}
+                            color={highlightFilters.importance.includes(imp) ? 'fg' : 'fg.muted'}
+                            fontWeight={highlightFilters.importance.includes(imp) ? 'semibold' : 'normal'}
+                            border="1px solid"
+                            borderColor={highlightFilters.importance.includes(imp) ? 'brand/40' : 'border.muted'}
                           >
-                            <span className="capitalize">{imp}</span> <span className="opacity-60">({stats.byImportance[imp] || 0})</span>
-                          </button>
+                            <Text textTransform="capitalize">{imp}</Text> <Text as="span" opacity={0.6}>({stats.byImportance[imp] || 0})</Text>
+                          </Flex>
                         ))}
-                      </div>
-                    </div>
+                      </Flex>
+                    </Box>
 
                     {/* Order */}
-                    <div>
-                      <span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium mb-1.5 flex items-center gap-1">
+                    <Box>
+                      <Flex as="span" fontSize="10px" color="fg.muted" textTransform="uppercase" letterSpacing="wider" fontWeight="medium" mb="6px" align="center" gap={1}>
                         Order
-                      </span>
-                      <div className="flex flex-col gap-1">
+                      </Flex>
+                      <Flex direction="column" gap={1}>
                         {([1, 2, 3, 4, 5].filter(o => consequences.some(c => c.order === o)) as ConsequenceOrder[]).map((ord) => (
-                          <button
+                          <Flex
+                            as="button"
                             key={ord}
                             onClick={() => toggleHighlightOrder(ord)}
-                            className={`w-full px-2 py-1 text-[10px] rounded transition-colors text-left flex items-center justify-between ${
-                              highlightFilters.orders.includes(ord)
-                                ? 'bg-indigo-100 text-indigo-700 border border-indigo-300'
-                                : 'bg-slate-50 text-slate-400 border border-slate-200'
-                            }`}
+                            w="100%"
+                            px={2}
+                            py={1}
+                            fontSize="10px"
+                            rounded="sm"
+                            transition="colors"
+                            textAlign="left"
+                            align="center"
+                            justify="space-between"
+                            bg={highlightFilters.orders.includes(ord) ? 'brand/12' : 'transparent'}
+                            color={highlightFilters.orders.includes(ord) ? 'fg' : 'fg.muted'}
+                            fontWeight={highlightFilters.orders.includes(ord) ? 'semibold' : 'normal'}
+                            border="1px solid"
+                            borderColor={highlightFilters.orders.includes(ord) ? 'brand/40' : 'border.muted'}
                           >
-                            {ord === 1 ? '1st Order' : ord === 2 ? '2nd Order' : ord === 3 ? '3rd Order' : `${ord}th Order`} <span className="opacity-60">({stats.byOrder[ord] || 0})</span>
-                          </button>
+                            {ord === 1 ? '1st Order' : ord === 2 ? '2nd Order' : ord === 3 ? '3rd Order' : `${ord}th Order`} <Text as="span" opacity={0.6}>({stats.byOrder[ord] || 0})</Text>
+                          </Flex>
                         ))}
-                      </div>
-                    </div>
+                      </Flex>
+                    </Box>
 
                     {/* Ideas toggle */}
-                    <div>
-                      <button
+                    <Box>
+                      <Flex
+                        as="button"
                         onClick={toggleShowIdeas}
-                        className={`w-full px-1.5 py-1 text-[10px] rounded flex items-center gap-1 justify-center transition-colors border ${
-                          highlightFilters.showIdeas ? '' : 'bg-slate-50 text-slate-400 border-slate-200'
-                        }`}
-                        style={highlightFilters.showIdeas ? { backgroundColor: '#fff7e6', borderColor: '#ff9f1c', color: '#7a4100' } : {}}
+                        w="100%"
+                        px="6px"
+                        py={1}
+                        fontSize="10px"
+                        rounded="sm"
+                        align="center"
+                        gap={1}
+                        justify="center"
+                        transition="colors"
+                        border="1px solid"
+                        bg={highlightFilters.showIdeas ? 'brand/12' : 'transparent'}
+                        color={highlightFilters.showIdeas ? 'fg' : 'fg.muted'}
+                        fontWeight={highlightFilters.showIdeas ? 'semibold' : 'normal'}
+                        borderColor={highlightFilters.showIdeas ? 'brand/40' : 'border.muted'}
                       >
-                        <Lightbulb className="w-3 h-3" /> Ideas & Solutions <span className="opacity-60">({stats.ideasCount})</span>
-                      </button>
-                    </div>
-                  </div>
+                        <Lightbulb style={{ width: 12, height: 12 }} /> Ideas & Solutions <Text as="span" opacity={0.6}>({stats.ideasCount})</Text>
+                      </Flex>
+                    </Box>
+                  </Flex>
                 )}
-              </div>
-            </div>
+              </Box>
+            </Flex>
           )}
 
           <MiniMap
             nodeColor={(node) => {
-              if (node.type === 'seed') return '#2b6cb0';
-              const consequence = node.data?.consequence as Consequence;
-              if (consequence) {
-                return getSentimentColors(consequence.sentiment).border;
-              }
-              return '#94a3b8';
+              if (node.type === 'seed') return '#0005e9';
+              return 'var(--chakra-colors-fg-muted, #94a3b8)';
             }}
-            maskColor="rgba(0, 0, 0, 0.1)"
+            maskColor="rgba(var(--node-overlay-inv, 0,0,0), 0.08)"
           />
         </ReactFlow>
 
+        {/* ── Connect mode: SVG tether line overlay ── */}
+        {connectModeSourceId && connectMousePos && mapContainerRef.current && (() => {
+          const containerRect = mapContainerRef.current!.getBoundingClientRect();
+          const rfInstance = reactFlowInstanceRef.current;
+          if (!rfInstance) return null;
+
+          // Find the source node's screen position (center of node)
+          const sourceNode = nodesRef.current.find(n => n.id === connectModeSourceId);
+          if (!sourceNode) return null;
+          const sourceFlowPos = sourceNode.position;
+          // Convert flow position to screen position
+          const viewport = rfInstance.getViewport();
+          const sourceCenterX = sourceFlowPos.x * viewport.zoom + viewport.x + 140 * viewport.zoom; // 280px node / 2
+          const sourceCenterY = sourceFlowPos.y * viewport.zoom + viewport.y + 50 * viewport.zoom;  // approx center
+
+          // Mouse position relative to container
+          const mouseX = connectMousePos.x - containerRect.left;
+          const mouseY = connectMousePos.y - containerRect.top;
+          const srcX = sourceCenterX;
+          const srcY = sourceCenterY;
+
+          // Arrow shows parent→child direction.
+          // Default: target is parent, source is child → arrow from mouse to source node
+          // Shift: source is parent, target is child → arrow from source node to mouse
+          const fromX = isShiftHeld ? srcX : mouseX;
+          const fromY = isShiftHeld ? srcY : mouseY;
+          const toX = isShiftHeld ? mouseX : srcX;
+          const toY = isShiftHeld ? mouseY : srcY;
+
+          return (
+            <svg
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                height: '100%',
+                pointerEvents: 'none',
+                zIndex: 1000,
+              }}
+            >
+              <defs>
+                <marker
+                  id="connect-arrowhead"
+                  markerWidth="12"
+                  markerHeight="8"
+                  refX="10"
+                  refY="4"
+                  orient="auto"
+                  markerUnits="userSpaceOnUse"
+                >
+                  <path d="M 0 0 L 12 4 L 0 8 Z" fill={isShiftHeld ? '#a78bfa' : '#22d3ee'} />
+                </marker>
+              </defs>
+              <line
+                x1={fromX}
+                y1={fromY}
+                x2={toX}
+                y2={toY}
+                stroke={isShiftHeld ? '#a78bfa' : '#22d3ee'}
+                strokeWidth={2.5}
+                strokeDasharray="8 4"
+                markerEnd="url(#connect-arrowhead)"
+                opacity={0.85}
+              />
+            </svg>
+          );
+        })()}
+
+        {/* Connect mode status banner */}
+        {connectModeSourceId && (
+          <Flex
+            position="absolute"
+            top={3}
+            left="50%"
+            transform="translateX(-50%)"
+            zIndex={1001}
+            bg="bg.canvas"
+            border="1px solid"
+            borderColor={isShiftHeld ? '#a78bfa' : '#22d3ee'}
+            rounded="full"
+            shadow="lg"
+            px={4}
+            py={2}
+            align="center"
+            gap={2}
+            fontSize="sm"
+            fontWeight="medium"
+            color="fg"
+          >
+            <Cable style={{ width: 16, height: 16, color: isShiftHeld ? '#a78bfa' : '#22d3ee' }} />
+            <Text>{isShiftHeld ? 'Click a node to set as child' : 'Click a node to set as parent'}</Text>
+            <Text fontSize="xs" color="fg.muted" ml={1}>Hold Shift to reverse</Text>
+            <Box
+              as="button"
+              ml={2}
+              px={2}
+              py={0.5}
+              rounded="md"
+              fontSize="xs"
+              color="fg.muted"
+              _hover={{ bg: 'bg.hover', color: 'fg' }}
+              cursor="pointer"
+              onClick={handleCancelConnectMode}
+              style={{ border: 'none', background: 'transparent' }}
+            >
+              Esc to cancel
+            </Box>
+          </Flex>
+        )}
+
+        {/* Edge popover — disconnect / reverse */}
+        {edgePopover && (
+          <Box
+            position="fixed"
+            left={`${edgePopover.screenX}px`}
+            top={`${edgePopover.screenY}px`}
+            zIndex={1002}
+            bg="bg.canvas"
+            border="1px solid"
+            borderColor="border.muted"
+            rounded="lg"
+            shadow="lg"
+            overflow="hidden"
+            minW="160px"
+            style={{ transform: 'translate(-50%, -100%) translateY(-8px)' }}
+          >
+            <Box
+              as="button"
+              display="flex"
+              alignItems="center"
+              gap={2}
+              w="full"
+              px={3}
+              py={2}
+              fontSize="sm"
+              color="red.500"
+              bg="transparent"
+              _hover={{ bg: 'red.50' }}
+              cursor="pointer"
+              onClick={handleDisconnect}
+              style={{ border: 'none', textAlign: 'left' }}
+            >
+              <Unlink style={{ width: 14, height: 14 }} />
+              Disconnect
+            </Box>
+            {edgePopover.parentId !== 'seed' && (
+              <Box
+                as="button"
+                display="flex"
+                alignItems="center"
+                gap={2}
+                w="full"
+                px={3}
+                py={2}
+                fontSize="sm"
+                color="fg"
+                bg="transparent"
+                _hover={{ bg: 'bg.hover' }}
+                cursor="pointer"
+                onClick={handleReverseEdge}
+                style={{ border: 'none', textAlign: 'left' }}
+              >
+                <ArrowRightLeft style={{ width: 14, height: 14 }} />
+                Reverse direction
+              </Box>
+            )}
+          </Box>
+        )}
+
+        {/* Right-click context menu */}
+        {contextMenu && (
+          <Box
+            position="fixed"
+            left={`${contextMenu.x}px`}
+            top={`${contextMenu.y}px`}
+            zIndex={50}
+            bg="bg.canvas"
+            border="1px solid"
+            borderColor="border.muted"
+            rounded="lg"
+            shadow="lg"
+            overflow="hidden"
+            minW="160px"
+          >
+            <Box
+              as="button"
+              display="flex"
+              alignItems="center"
+              gap={2}
+              w="full"
+              px={3}
+              py={2}
+              fontSize="sm"
+              color="fg"
+              bg="transparent"
+              _hover={{ bg: 'bg.hover' }}
+              cursor="pointer"
+              onClick={handleContextMenuAddNode}
+              style={{ border: 'none', textAlign: 'left' }}
+            >
+              <Text fontSize="md">+</Text>
+              Add node here
+            </Box>
+          </Box>
+        )}
+
         {/* Center screen progress overlay */}
         {generationPhase !== 'complete' && generationPhase !== 'idle' && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
-            <div className="bg-white/90 backdrop-blur-md rounded-2xl shadow-2xl border border-slate-200 px-8 py-6 max-w-md text-center pointer-events-auto">
-              <div className="flex justify-center mb-4">
-                <div className="relative">
-                  <Loader2 className="w-10 h-10 text-seed animate-spin" />
-                  <Sparkles className="w-5 h-5 text-amber-500 absolute -top-1 -right-1 animate-pulse" />
-                </div>
-              </div>
-              <h3 className="font-bold text-slate-900 text-lg mb-1">
+          <Flex position="absolute" inset={0} align="center" justify="center" pointerEvents="none" zIndex={20}>
+            <Box bg="bg.muted" backdropFilter="blur(12px)" rounded="2xl" shadow="2xl" border="1px solid" borderColor="border.muted" px={8} py={6} maxW="md" textAlign="center" pointerEvents="auto">
+              <Flex justify="center" mb={4}>
+                <Box position="relative">
+                  <Loader2 style={{ width: 40, height: 40, color: 'var(--chakra-colors-brand)' }} className="animate-spin" />
+                  <Sparkles style={{ width: 20, height: 20, color: '#f59e0b', position: 'absolute', top: -4, right: -4 }} className="animate-pulse" />
+                </Box>
+              </Flex>
+              <Text fontWeight="bold" color="fg" fontSize="lg" mb={1}>
                 {generationPhase === 'first-order' ? 'Mapping Direct Consequences' :
                  generationPhase === 'second-order' ? 'Tracing Ripple Effects' :
                  generationPhase === 'third-order' ? 'Discovering Cascade Impacts' :
                  generationPhase === 'solutions' ? 'Generating Solutions & Ideas' :
                  'Analyzing...'}
-              </h3>
-              <p className="text-sm text-slate-500 mb-4">
+              </Text>
+              <Text fontSize="sm" color="fg.muted" mb={4}>
                 {progressMessage || `Phase ${getPhaseNumber(generationPhase)} of ${totalPhases}`}
-              </p>
-              <div className="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden">
-                <div
-                  className="bg-seed h-2.5 rounded-full transition-all duration-700 ease-out"
+              </Text>
+              <Box w="100%" bg="bg.active" rounded="full" h="10px" overflow="hidden">
+                <Box
+                  bg="brand"
+                  h="10px"
+                  rounded="full"
+                  transition="all 0.7s ease-out"
                   style={{ width: `${Math.min((getPhaseNumber(generationPhase) / totalPhases) * 100, 100)}%` }}
                 />
-              </div>
-              <p className="text-xs text-slate-400 mt-2">
+              </Box>
+              <Text fontSize="xs" color="fg.muted" mt={2}>
                 {consequences.length > 0 ? `${consequences.length} consequences mapped so far` : 'Starting analysis...'}
-              </p>
-            </div>
-          </div>
+              </Text>
+            </Box>
+          </Flex>
         )}
 
-        {/* Floating prompt bar */}
-        {generationPhase === 'complete' && (
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 w-full max-w-2xl px-4 z-10">
-            <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border border-slate-200 p-3">
-              {promptProgress && (
-                <div className="text-xs text-slate-500 mb-2 px-2 flex items-center gap-2">
-                  {isPrompting && <Loader2 className="w-3 h-3 animate-spin" />}
-                  {promptProgress}
-                </div>
-              )}
-              <form
-                onSubmit={(e) => { e.preventDefault(); handlePromptSubmit(); }}
-                className="flex items-center gap-2"
-              >
-                {lastExpansionTime && (
-                  <button
-                    type="button"
-                    onClick={() => setShowNewHighlight(!showNewHighlight)}
-                    className={`p-1.5 rounded-lg transition-colors flex-shrink-0 ${
-                      showNewHighlight
-                        ? 'bg-amber-100 text-amber-600'
-                        : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'
-                    }`}
-                    title={showNewHighlight ? 'Hide new highlights' : 'Show new highlights'}
-                  >
-                    <Sparkles className="w-4 h-4" />
-                  </button>
-                )}
-                {!lastExpansionTime && <Sparkles className="w-4 h-4 text-seed flex-shrink-0 ml-1" />}
-                <input
-                  type="text"
-                  value={promptText}
-                  onChange={(e) => setPromptText(e.target.value)}
-                  placeholder="Push deeper, add wildcards, explore economic impacts..."
-                  className="flex-1 bg-transparent text-sm text-slate-700 placeholder-slate-400 outline-none"
-                  disabled={isPrompting}
+        {/* Floating prompt bar removed — low usage, obscured nodes */}
+
+        {/* Report generation progress overlay */}
+        {reportPhase !== 'idle' && reportPhase !== 'ready' && (
+          <Flex position="absolute" inset={0} align="center" justify="center" zIndex={25} bg="blackAlpha.200" backdropFilter="blur(4px)">
+            <Box bg="bg.muted" backdropFilter="blur(12px)" rounded="2xl" shadow="2xl" border="1px solid" borderColor="border.muted" px={8} py={6} maxW="md" textAlign="center">
+              <Flex justify="center" mb={4}>
+                <Box position="relative">
+                  <Loader2 style={{ width: 40, height: 40, color: 'var(--chakra-colors-brand)' }} className="animate-spin" />
+                  <Box as={FileText} style={{ width: 18, height: 18, color: 'var(--chakra-colors-brand)', position: 'absolute', top: -2, right: -6 }} className="animate-pulse" />
+                </Box>
+              </Flex>
+              <Text fontWeight="bold" color="fg" fontSize="lg" mb={1} fontFamily="heading">
+                {reportPhase === 'computing-stats' ? 'Analyzing Consequence Map' :
+                 reportPhase === 'linking-subjects' ? 'Linking Subjects to Consequences' :
+                 'Writing Futurescape Report'}
+              </Text>
+              <Text fontSize="sm" color="fg.muted" mb={4}>
+                {reportPhase === 'computing-stats' ? 'Computing statistics and risk indicators...' :
+                 reportPhase === 'linking-subjects' ? 'Identifying subject–consequence relationships...' :
+                 'Synthesizing executive summary, risks, and recommendations...'}
+              </Text>
+              <Box w="100%" bg="bg.active" rounded="full" h="10px" overflow="hidden">
+                <Box
+                  bg="brand"
+                  h="10px"
+                  rounded="full"
+                  transition="all 0.7s ease-out"
+                  style={{ width: reportPhase === 'computing-stats' ? '20%' : reportPhase === 'linking-subjects' ? '50%' : '80%' }}
                 />
-                <button
-                  type="submit"
-                  disabled={!promptText.trim() || isPrompting}
-                  className="p-2 rounded-xl bg-seed text-white hover:bg-seed-dark disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0"
-                >
-                  {isPrompting ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Send className="w-4 h-4" />
-                  )}
-                </button>
-              </form>
-            </div>
-          </div>
+              </Box>
+              <Flex justify="center" gap={6} mt={4}>
+                {(['computing-stats', 'linking-subjects', 'synthesizing'] as const).map((p, i) => {
+                  const phases: ReportGenerationPhase[] = ['computing-stats', 'linking-subjects', 'synthesizing'];
+                  const currentIdx = phases.indexOf(reportPhase as any);
+                  const thisIdx = i;
+                  const status = thisIdx < currentIdx ? 'done' : thisIdx === currentIdx ? 'active' : 'pending';
+                  return (
+                    <Flex key={p} align="center" gap={1.5} fontSize="xs" color={status === 'pending' ? 'fg.muted' : 'fg'}>
+                      {status === 'done' ? (
+                        <Box as={CheckCircle2} w={3.5} h={3.5} color="fg" />
+                      ) : status === 'active' ? (
+                        <Box as={Loader2} w={3.5} h={3.5} color="brand" className="animate-spin" />
+                      ) : (
+                        <Box w={3.5} h={3.5} rounded="full" border="1.5px solid" borderColor="fg.muted" />
+                      )}
+                      <Text fontWeight={status === 'active' ? 'semibold' : 'normal'}>
+                        {i === 0 ? 'Statistics' : i === 1 ? 'Subjects' : 'Report'}
+                      </Text>
+                    </Flex>
+                  );
+                })}
+              </Flex>
+            </Box>
+          </Flex>
         )}
-      </div>
+      </Box>
 
-    </div>
+      </Flex>
+
+      {/* Delete confirmation modal (replaces native confirm() dialog) */}
+      {pendingDelete && (
+        <Box
+          position="fixed"
+          inset={0}
+          zIndex={50}
+          display="flex"
+          alignItems="center"
+          justifyContent="center"
+          onClick={cancelPendingDelete}
+        >
+          {/* Backdrop */}
+          <Box position="absolute" inset={0} bg="blackAlpha.500" backdropFilter="blur(8px)" />
+
+          {/* Modal panel */}
+          <Box
+            position="relative"
+            w={{ base: '90%', md: '420px' }}
+            bg="bg.canvas"
+            rounded="8px"
+            shadow="xl"
+            borderWidth="1px"
+            borderStyle="solid"
+            borderColor="border.emphasized"
+            onClick={(e: React.MouseEvent) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <Flex px={5} py={3} align="center" justify="space-between" borderBottom="1px solid" borderColor="border.muted">
+              <Flex align="center" gap={2}>
+                <AlertCircle style={{ width: 20, height: 20, color: 'var(--chakra-colors-red-500, #e53e3e)' }} />
+                <Text fontSize="md" fontWeight="semibold" color="fg" fontFamily="heading">Confirm Delete</Text>
+              </Flex>
+              <Box
+                as="button"
+                onClick={cancelPendingDelete}
+                p={1.5}
+                rounded="6px"
+                color="fg.muted"
+                _hover={{ color: 'fg', bg: 'bg.hover' }}
+                transition="all 0.2s"
+              >
+                <X style={{ width: 18, height: 18 }} />
+              </Box>
+            </Flex>
+
+            {/* Body */}
+            <Box px={5} py={4}>
+              {pendingDelete.descendantIds.length === 0 ? (
+                <>
+                  <Text fontSize="sm" color="fg" mb={4}>
+                    Delete this node?
+                    {pendingDelete.directChildIds.length > 0 && (
+                      <Text as="span" color="fg.muted"> Its {pendingDelete.directChildIds.length} direct child{pendingDelete.directChildIds.length > 1 ? 'ren' : ''} will become unconnected.</Text>
+                    )}
+                  </Text>
+                  <Flex gap={2} justify="flex-end">
+                    <Button onClick={cancelPendingDelete} size="sm" bg="bg.hover" color="fg" rounded="lg" fontWeight="medium" _hover={{ bg: 'bg.active' }}>
+                      Cancel
+                    </Button>
+                    <Button onClick={confirmDeleteSingle} size="sm" bg="red.500" color="white" rounded="lg" fontWeight="medium" _hover={{ bg: 'red.600' }}>
+                      Delete
+                    </Button>
+                  </Flex>
+                </>
+              ) : (
+                <>
+                  <Text fontSize="sm" color="fg" mb={1}>
+                    This node has {pendingDelete.descendantIds.length} descendant{pendingDelete.descendantIds.length > 1 ? 's' : ''} in its branch.
+                  </Text>
+                  <Text fontSize="xs" color="fg.muted" mb={4}>
+                    {pendingDelete.directChildIds.length > 0 && `Deleting only this node will leave ${pendingDelete.directChildIds.length} direct child${pendingDelete.directChildIds.length > 1 ? 'ren' : ''} unconnected.`}
+                    {(pendingDelete.orphanUpdates?.size ?? 0) > 0 && ` ${pendingDelete.orphanUpdates!.size} node${pendingDelete.orphanUpdates!.size > 1 ? 's' : ''} with other parents will keep their remaining connections.`}
+                  </Text>
+                  <Flex gap={2} justify="flex-end">
+                    <Button onClick={cancelPendingDelete} size="sm" bg="bg.hover" color="fg" rounded="lg" fontWeight="medium" _hover={{ bg: 'bg.active' }}>
+                      Cancel
+                    </Button>
+                    <Button onClick={confirmDeleteBranch} size="sm" bg="bg.hover" color="red.500" rounded="lg" fontWeight="medium" borderWidth="1px" borderColor="red.200" _hover={{ bg: 'red.50' }}>
+                      Delete branch ({pendingDelete.descendantIds.length + 1})
+                    </Button>
+                    <Button onClick={confirmDeleteSingle} size="sm" bg="red.500" color="white" rounded="lg" fontWeight="medium" _hover={{ bg: 'red.600' }}>
+                      Delete this node
+                    </Button>
+                  </Flex>
+                </>
+              )}
+            </Box>
+          </Box>
+        </Box>
+      )}
+      {/* Report Panel Overlay */}
+      <ReportPanel
+        isOpen={reportPanelOpen}
+        onClose={() => setReportPanelOpen(false)}
+        report={reportData}
+        mapNodes={nodes}
+        mapEdges={edges}
+      />
+    </Flex>
   );
 }
 

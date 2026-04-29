@@ -27,6 +27,13 @@ const ORDER_BANDS: Record<number, { min: number; base: number }> = {
 const NODE_WIDTH = 250;
 const MIN_ARC_SPACING = 30;
 
+// Spacing multiplier for verbose modes — nodes need more room when text is longer
+export type VerbositySpacing = 'concise' | 'detailed';
+const SPACING_MULTIPLIERS: Record<VerbositySpacing, number> = {
+  concise: 0.9,
+  detailed: 1.4,
+};
+
 // ─── computeRadialLayout ─────────────────────────────────────────
 
 /**
@@ -41,7 +48,9 @@ export function computeRadialLayout(
   consequences: Consequence[],
   existingPositions?: Map<string, Position>,
   forceRelayout?: boolean,
+  verbosity?: VerbositySpacing,
 ): Map<string, Position> {
+  const spacingMul = SPACING_MULTIPLIERS[verbosity || 'concise'];
   const positions = new Map<string, Position>();
   positions.set('seed', { x: 0, y: 0 });
 
@@ -52,83 +61,125 @@ export function computeRadialLayout(
     });
   }
 
-  // Group by order
-  const byOrder: Record<number, Consequence[]> = { 1: [], 2: [], 3: [], 4: [], 5: [] };
+  // Separate unattached nodes (parentIds: []) from connected ones.
+  // Unattached nodes go in the first ring, clustered together.
+  const unattachedNodes: Consequence[] = [];
+  const connectedConsequences: Consequence[] = [];
   for (const c of consequences) {
+    if (c.parentIds.length === 0) {
+      unattachedNodes.push(c);
+    } else {
+      connectedConsequences.push(c);
+    }
+  }
+
+  // Group connected nodes by order
+  const byOrder: Record<number, Consequence[]> = { 1: [], 2: [], 3: [], 4: [], 5: [] };
+  for (const c of connectedConsequences) {
     if (byOrder[c.order]) byOrder[c.order].push(c);
   }
 
-  // Calculate dynamic radii based on node count per ring
+  // Calculate dynamic radii based on node count per ring, scaled by verbosity
   const calculateRadius = (nodeCount: number, band: { min: number; base: number }): number => {
-    if (nodeCount === 0) return band.base;
-    const circumferenceNeeded = nodeCount * (NODE_WIDTH + MIN_ARC_SPACING);
+    if (nodeCount === 0) return band.base * spacingMul;
+    const circumferenceNeeded = nodeCount * (NODE_WIDTH + MIN_ARC_SPACING) * spacingMul;
     const radiusFromCircumference = circumferenceNeeded / (2 * Math.PI);
-    return Math.max(band.base, radiusFromCircumference);
+    return Math.max(band.base * spacingMul, radiusFromCircumference);
   };
 
+  // Include unattached nodes in order-1 ring size calculation
   const orderRadii: Record<number, number> = {};
   for (let order = 1; order <= 5; order++) {
-    orderRadii[order] = calculateRadius(byOrder[order].length, ORDER_BANDS[order]);
+    const ringCount = order === 1 ? byOrder[1].length + unattachedNodes.length : byOrder[order].length;
+    orderRadii[order] = calculateRadius(ringCount, ORDER_BANDS[order]);
   }
 
   // ── Order 1: ring around seed ──
-  // Only compute positions for nodes that don't already have one
-  const order1 = byOrder[1];
-  const order1NeedingLayout = order1.filter(c => !positions.has(c.id));
-  const order1Existing = order1.filter(c => positions.has(c.id));
+  // Connected order-1 nodes are placed first, then unattached nodes are
+  // clustered together in the remaining angular space.
+  const order1Connected = byOrder[1];
+  const order1ConnectedNeedingLayout = order1Connected.filter(c => !positions.has(c.id));
+  const order1ConnectedExisting = order1Connected.filter(c => positions.has(c.id));
+  const unattachedNeedingLayout = unattachedNodes.filter(c => !positions.has(c.id));
 
-  if (order1NeedingLayout.length > 0) {
+  // Total nodes sharing this ring (for angle distribution)
+  const totalRingCount = order1Connected.length + unattachedNodes.length;
+
+  if (order1ConnectedNeedingLayout.length > 0 || unattachedNeedingLayout.length > 0) {
     // Find angles already occupied by existing order-1 nodes
-    const occupiedAngles = order1Existing.map(c => {
+    const occupiedAngles = order1ConnectedExisting.map(c => {
+      const pos = positions.get(c.id)!;
+      return Math.atan2(pos.y, pos.x);
+    });
+    // Also count existing unattached nodes that already have positions
+    const unattachedExisting = unattachedNodes.filter(c => positions.has(c.id));
+    const unattachedExistingAngles = unattachedExisting.map(c => {
       const pos = positions.get(c.id)!;
       return Math.atan2(pos.y, pos.x);
     });
 
-    // Distribute new nodes evenly in remaining angular space
-    if (order1Existing.length === 0) {
-      // Fresh layout: distribute all evenly
-      order1NeedingLayout.forEach((c, idx) => {
-        const totalCount = order1.length;
-        const angle = (idx / totalCount) * 2 * Math.PI - Math.PI / 2;
-        const radius = orderRadii[1];
+    if (order1ConnectedExisting.length === 0 && unattachedExisting.length === 0) {
+      // Fresh layout: place connected nodes first, then unattached clustered at the end
+      const connectedCount = order1ConnectedNeedingLayout.length;
+      const unattachedCount = unattachedNeedingLayout.length;
+      const radius = orderRadii[1];
+
+      // Connected nodes get the first portion of the ring
+      order1ConnectedNeedingLayout.forEach((c, idx) => {
+        const angle = (idx / totalRingCount) * 2 * Math.PI - Math.PI / 2;
+        positions.set(c.id, {
+          x: Math.cos(angle) * radius,
+          y: Math.sin(angle) * radius,
+        });
+      });
+
+      // Unattached nodes cluster together right after connected nodes
+      unattachedNeedingLayout.forEach((c, idx) => {
+        const angle = ((connectedCount + idx) / totalRingCount) * 2 * Math.PI - Math.PI / 2;
         positions.set(c.id, {
           x: Math.cos(angle) * radius,
           y: Math.sin(angle) * radius,
         });
       });
     } else {
-      // Incremental: find gaps between existing nodes and place new ones
-      const allAngles = [...occupiedAngles].sort((a, b) => a - b);
-      let gapAngles: number[] = [];
+      // Incremental: use the SAME radius as existing nodes (not the recalculated one)
+      // so new nodes appear on the same ring, not closer/further.
+      const allExisting = [...order1ConnectedExisting, ...unattachedExisting];
+      const existingRadii = allExisting.map(c => {
+        const pos = positions.get(c.id)!;
+        return Math.sqrt(pos.x * pos.x + pos.y * pos.y);
+      });
+      const existingRadius = existingRadii.length > 0
+        ? existingRadii.reduce((a, b) => a + b, 0) / existingRadii.length
+        : orderRadii[1];
+      const radius = existingRadius > 0 ? existingRadius : orderRadii[1];
 
-      // Find the largest gaps and distribute new nodes into them
-      for (let i = 0; i < allAngles.length; i++) {
-        const next = i + 1 < allAngles.length ? allAngles[i + 1] : allAngles[0] + 2 * Math.PI;
-        const gap = next - allAngles[i];
-        const midAngle = allAngles[i] + gap / 2;
-        gapAngles.push(midAngle);
-      }
+      // Find angular gaps between all existing ring nodes and place new ones in largest gaps
+      const allExistingAngles = [...occupiedAngles, ...unattachedExistingAngles];
 
-      // Sort gaps by size (largest first) and assign new nodes
-      // Simple approach: evenly space new nodes across all available angles
-      const totalAfter = order1.length;
+      // Place connected nodes first (largest gap strategy)
+      const usedAngles = [...allExistingAngles];
       let newIdx = 0;
-      order1NeedingLayout.forEach((c) => {
-        // Find the next unoccupied angle slot in the full ring
-        let angle: number;
-        if (gapAngles.length > 0) {
-          angle = gapAngles[newIdx % gapAngles.length];
-          // Offset slightly if reusing a gap
-          if (newIdx >= gapAngles.length) {
-            angle += (Math.PI / totalAfter) * (Math.floor(newIdx / gapAngles.length));
+      const allNewNodes = [...order1ConnectedNeedingLayout, ...unattachedNeedingLayout];
+      allNewNodes.forEach((c) => {
+        usedAngles.sort((a, b) => a - b);
+        let bestAngle = (newIdx / allNewNodes.length) * 2 * Math.PI - Math.PI / 2; // fallback
+        let bestGapSize = 0;
+
+        for (let i = 0; i < usedAngles.length; i++) {
+          const current = usedAngles[i];
+          const next = i + 1 < usedAngles.length ? usedAngles[i + 1] : usedAngles[0] + 2 * Math.PI;
+          const gapSize = next - current;
+          if (gapSize > bestGapSize) {
+            bestGapSize = gapSize;
+            bestAngle = current + gapSize / 2;
           }
-        } else {
-          angle = (newIdx / order1NeedingLayout.length) * 2 * Math.PI - Math.PI / 2;
         }
-        const radius = orderRadii[1];
+
+        usedAngles.push(bestAngle);
         positions.set(c.id, {
-          x: Math.cos(angle) * radius,
-          y: Math.sin(angle) * radius,
+          x: Math.cos(bestAngle) * radius,
+          y: Math.sin(bestAngle) * radius,
         });
         newIdx++;
       });
@@ -144,37 +195,112 @@ export function computeRadialLayout(
     const needingLayout = orderConsequences.filter(c => !positions.has(c.id));
     if (needingLayout.length === 0) continue;
 
-    // Group by parent
+    // Group by primary parent (first in parentIds array)
+    // Unattached nodes are already handled in the order-1 ring, so all nodes
+    // here are guaranteed to have at least one parent.
     const byParent: Record<string, Consequence[]> = {};
     needingLayout.forEach(c => {
-      const parentId = c.parentId || 'seed';
-      if (!byParent[parentId]) byParent[parentId] = [];
-      byParent[parentId].push(c);
+      const primaryParent = c.parentIds[0] || 'seed';
+      if (!byParent[primaryParent]) byParent[primaryParent] = [];
+      byParent[primaryParent].push(c);
     });
 
-    Object.entries(byParent).forEach(([parentId, children]) => {
+    // Also find existing siblings (already positioned) for each parent so we
+    // don't place new children on top of them.
+    const existingSiblingsByParent: Record<string, Consequence[]> = {};
+    orderConsequences.filter(c => positions.has(c.id)).forEach(c => {
+      const pid = c.parentIds[0] || 'seed';
+      if (!existingSiblingsByParent[pid]) existingSiblingsByParent[pid] = [];
+      existingSiblingsByParent[pid].push(c);
+    });
+
+    Object.entries(byParent).forEach(([parentId, newChildren]) => {
       const parentPos = positions.get(parentId) || { x: 0, y: 0 };
       const parentAngleFromCenter = Math.atan2(parentPos.y, parentPos.x);
 
-      // Calculate spread angle based on number of children
-      const maxSpread = Math.PI / 2; // 90 degrees max
-      const spreadPerChild = Math.min(Math.PI / 6, maxSpread / Math.max(children.length, 1));
-
-      children.forEach((c, idx) => {
-        const centerIdx = (children.length - 1) / 2;
-        const offsetFromCenter = idx - centerIdx;
-        const angle = parentAngleFromCenter + offsetFromCenter * spreadPerChild;
-
-        // Distance from parent based on order, with jitter
-        const baseDistance = 350 + (order - 2) * 100;
-        const jitter = Math.sin(idx * 7.3) * 30; // deterministic "random"
-        const distance = baseDistance + jitter;
-
-        positions.set(c.id, {
-          x: parentPos.x + Math.cos(angle) * distance,
-          y: parentPos.y + Math.sin(angle) * distance,
-        });
+      // Collect angles already occupied by existing siblings of this parent
+      const existingSiblings = existingSiblingsByParent[parentId] || [];
+      const occupiedAngles = existingSiblings.map(sib => {
+        const sibPos = positions.get(sib.id)!;
+        return Math.atan2(sibPos.y - parentPos.y, sibPos.x - parentPos.x);
       });
+
+      // Total children (existing + new) determines spread
+      const totalChildren = existingSiblings.length + newChildren.length;
+      const maxSpread = Math.PI / 2; // 90 degrees max
+      const spreadPerChild = Math.min(Math.PI / 6, maxSpread / Math.max(totalChildren, 1));
+
+      if (occupiedAngles.length === 0) {
+        // No existing siblings — distribute new children around parent angle
+        newChildren.forEach((c, idx) => {
+          const centerIdx = (newChildren.length - 1) / 2;
+          const offsetFromCenter = idx - centerIdx;
+          const angle = parentAngleFromCenter + offsetFromCenter * spreadPerChild;
+
+          const baseDistance = (500 + (order - 2) * 150) * spacingMul;
+          const jitter = Math.sin(idx * 7.3) * 30;
+          const distance = baseDistance + jitter;
+
+          positions.set(c.id, {
+            x: parentPos.x + Math.cos(angle) * distance,
+            y: parentPos.y + Math.sin(angle) * distance,
+          });
+        });
+      } else {
+        // Has existing siblings — place new children adjacent to existing ones,
+        // staying within the parent's outward cone (±maxSpread from parent angle).
+        // This prevents nodes from wrapping around to the opposite side (closer to center).
+        const allSiblingAngles = [...occupiedAngles].sort((a, b) => a - b);
+
+        // Determine the angular bounds: parent direction ± maxSpread
+        const halfSpread = maxSpread;
+        const minAllowed = parentAngleFromCenter - halfSpread;
+        const maxAllowed = parentAngleFromCenter + halfSpread;
+
+        // Place new children at incremental offsets beyond existing siblings
+        const usedAngles = [...allSiblingAngles];
+        newChildren.forEach((c, idx) => {
+          // Find the best angle: spread out from existing siblings within the allowed cone
+          usedAngles.sort((a, b) => a - b);
+
+          // Try placing at incremental offsets from the edge of existing siblings
+          let bestAngle: number;
+          const existingInCone = usedAngles.filter(a => a >= minAllowed && a <= maxAllowed);
+
+          if (existingInCone.length === 0) {
+            // Fallback: spread from parent angle
+            bestAngle = parentAngleFromCenter + (idx + 1) * spreadPerChild;
+          } else {
+            // Find largest gap within the allowed cone
+            const coneAngles = [...existingInCone].sort((a, b) => a - b);
+            // Add the cone boundaries as virtual occupied angles
+            const withBounds = [minAllowed, ...coneAngles, maxAllowed];
+            let bestGapSize = 0;
+            bestAngle = parentAngleFromCenter + (idx + 1) * spreadPerChild; // fallback
+
+            for (let i = 0; i < withBounds.length - 1; i++) {
+              const gapSize = withBounds[i + 1] - withBounds[i];
+              if (gapSize > bestGapSize) {
+                bestGapSize = gapSize;
+                bestAngle = withBounds[i] + gapSize / 2;
+              }
+            }
+          }
+
+          // Clamp to allowed range
+          bestAngle = Math.max(minAllowed, Math.min(maxAllowed, bestAngle));
+          usedAngles.push(bestAngle);
+
+          const baseDistance = (500 + (order - 2) * 150) * spacingMul;
+          const jitter = Math.sin(idx * 7.3) * 30;
+          const distance = baseDistance + jitter;
+
+          positions.set(c.id, {
+            x: parentPos.x + Math.cos(bestAngle) * distance,
+            y: parentPos.y + Math.sin(bestAngle) * distance,
+          });
+        });
+      }
     });
   }
 
@@ -318,7 +444,7 @@ export function computeFocusPositions(
     while (currentId && currentId !== 'seed') {
       chainOrdered.unshift(currentId);
       const c = consLookup.get(currentId);
-      currentId = c?.parentId || undefined;
+      currentId = (c?.parentIds.length ? c.parentIds[0] : undefined);
     }
     chainOrdered.unshift('seed');
   }

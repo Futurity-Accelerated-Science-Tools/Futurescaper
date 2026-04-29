@@ -6,6 +6,7 @@ export interface RelevantSubject {
   name: string;
   relevance: 'direct' | 'tangential';
   reason: string;
+  relatedConsequenceIds: string[];
 }
 
 // Pre-filter subjects using keyword matching to get a manageable subset for the LLM
@@ -93,10 +94,13 @@ export async function findRelevantSubjects(
 
   onProgress?.(`Analyzing ${candidates.length} candidate subjects...`);
 
-  const consequenceSummary = consequences
+  // Include IDs so the LLM can reference specific consequences per subject
+  const consequenceSlice = consequences
     .filter(c => !c.nodeType || c.nodeType === 'consequence')
-    .slice(0, 25)
-    .map(c => `- [${c.sentiment}/${c.category}] ${c.text}`)
+    .slice(0, 25);
+
+  const consequenceSummary = consequenceSlice
+    .map(c => `- [${c.id}] [${c.sentiment}/${c.category}] ${c.text}`)
     .join('\n');
 
   const prompt = `You are analyzing the future scenario: "${input.title}"
@@ -111,6 +115,8 @@ From the following list of technology/innovation subjects, select:
 1. Up to 20 DIRECTLY RELEVANT subjects - technologies, innovations, or fields that are central to this scenario and its consequences
 2. Up to 10 TANGENTIALLY DISRUPTIVE subjects - things that aren't obviously related but could unexpectedly disrupt or transform how this scenario plays out (wildcards, unexpected connections)
 
+For EACH subject, also list the IDs of the consequences it most relates to (from the list above). This links subjects to specific parts of the consequence map.
+
 ## Candidate subjects:
 ${candidates.join(', ')}
 
@@ -121,15 +127,17 @@ Return a JSON object:
 \`\`\`json
 {
   "direct": [
-    {"name": "exact subject name from the list", "reason": "one-line explanation of relevance"}
+    {"name": "exact subject name from the list", "reason": "one-line explanation of relevance", "consequenceIds": ["id1", "id2"]}
   ],
   "tangential": [
-    {"name": "exact subject name from the list", "reason": "one-line explanation of how it could be disruptive"}
+    {"name": "exact subject name from the list", "reason": "one-line explanation of how it could be disruptive", "consequenceIds": ["id1"]}
   ]
 }
 \`\`\`
 
-IMPORTANT: Use the EXACT subject names from the lists provided. Do not invent new names.`;
+IMPORTANT:
+- Use the EXACT subject names from the lists provided. Do not invent new names.
+- consequenceIds must use the exact IDs from the consequence list above (the values in the first brackets).`;
 
   const response = await callAPI(
     [{ role: 'user', content: prompt }],
@@ -143,24 +151,31 @@ IMPORTANT: Use the EXACT subject names from the lists provided. Do not invent ne
     const jsonStr = jsonMatch[1] || jsonMatch[0];
     const parsed = JSON.parse(jsonStr);
 
+    // Valid IDs for filtering hallucinated references
+    const validIds = new Set(consequenceSlice.map(c => c.id));
+
     const results: RelevantSubject[] = [];
 
     if (parsed.direct) {
       for (const item of parsed.direct.slice(0, 20)) {
+        const rawIds: string[] = Array.isArray(item.consequenceIds) ? item.consequenceIds : [];
         results.push({
           name: item.name,
           relevance: 'direct',
           reason: item.reason || '',
+          relatedConsequenceIds: rawIds.filter(id => validIds.has(id)),
         });
       }
     }
 
     if (parsed.tangential) {
       for (const item of parsed.tangential.slice(0, 10)) {
+        const rawIds: string[] = Array.isArray(item.consequenceIds) ? item.consequenceIds : [];
         results.push({
           name: item.name,
           relevance: 'tangential',
           reason: item.reason || '',
+          relatedConsequenceIds: rawIds.filter(id => validIds.has(id)),
         });
       }
     }

@@ -1,6 +1,16 @@
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, Compass, Zap, Loader2 } from 'lucide-react';
+import { Box, Flex, Text } from '@chakra-ui/react';
+import { ChevronDown, ChevronRight, Compass, Loader2 } from 'lucide-react';
 import { RelevantSubject } from '../api/subjects';
+
+/** Brand-colored hexagon subject icon — matches the Engine's IconSubject */
+function SubjectHex({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: 0 }}>
+      <path d="M12 2L20.196 7V17L12 22L3.804 17V7L12 2Z" fill="#0005E9" stroke="#0005E9" strokeWidth="1" strokeLinejoin="round" />
+    </svg>
+  );
+}
 
 interface RelatedSubjectsProps {
   subjects: RelevantSubject[];
@@ -21,100 +31,145 @@ export function RelatedSubjects({ subjects, isLoading, onRetry }: RelatedSubject
   }
 
   return (
-    <div className="border-b border-slate-200">
-      <button
+    <Box borderBottom="1px solid" borderColor="border.muted">
+      <Box
+        as="button"
         onClick={() => setIsExpanded(!isExpanded)}
-        className="flex items-center justify-between w-full p-4 hover:bg-slate-50 transition-colors"
+        display="flex"
+        alignItems="center"
+        justifyContent="space-between"
+        w="full"
+        p={4}
+        _hover={{ bg: 'bg.hover' }}
+        transition="background 0.15s"
+        cursor="pointer"
       >
-        <div className="flex items-center gap-2">
+        <Flex align="center" gap={2}>
           {isExpanded ? (
-            <ChevronDown className="w-4 h-4 text-slate-400" />
+            <Box as={ChevronDown} w={4} h={4} color="fg.muted" />
           ) : (
-            <ChevronRight className="w-4 h-4 text-slate-400" />
+            <Box as={ChevronRight} w={4} h={4} color="fg.muted" />
           )}
-          <Compass className="w-4 h-4 text-indigo-500" />
-          <span className="text-sm font-semibold text-slate-700">
+          <Box as={Compass} w={4} h={4} color="fg.muted" />
+          <Text fontSize="sm" fontWeight="semibold" color="fg">
             Related Subjects
-          </span>
+          </Text>
           {isLoading ? (
-            <Loader2 className="w-3 h-3 text-indigo-400 animate-spin" />
+            <Box as={Loader2} w={3} h={3} color="fg.muted" className="animate-spin" />
           ) : (
-            <span className="text-xs text-slate-400">({totalCount})</span>
+            <Text fontSize="xs" color="fg.muted">({totalCount})</Text>
           )}
-        </div>
-      </button>
+        </Flex>
+      </Box>
 
       {isExpanded && (
-        <div className="px-4 pb-4 space-y-3">
+        <Flex direction="column" gap={3} px={4} pb={4}>
           {isLoading && totalCount === 0 && (
-            <div className="flex items-center gap-2 text-xs text-slate-500 py-2">
-              <Loader2 className="w-3 h-3 animate-spin" />
+            <Flex align="center" gap={2} fontSize="xs" color="fg.muted" py={2}>
+              <Box as={Loader2} w={3} h={3} className="animate-spin" />
               Identifying relevant subjects...
-            </div>
+            </Flex>
           )}
 
           {/* Direct subjects */}
           {directSubjects.length > 0 && (
-            <div>
-              <div className="text-xs font-medium text-slate-500 mb-1.5 flex items-center gap-1">
-                <span className="w-2 h-2 rounded-full bg-indigo-500" />
+            <Box>
+              <Text fontSize="2xs" fontWeight="semibold" color="fg.muted" textTransform="uppercase" letterSpacing="wider" mb={1.5}>
                 Directly Relevant ({directSubjects.length})
-              </div>
-              <div className="flex flex-wrap gap-1.5">
+              </Text>
+              <Flex direction="column" gap={0.5}>
                 {directSubjects.map((s) => (
-                  <span
+                  <Flex
                     key={s.name}
+                    as="button"
                     title={s.reason}
-                    className="inline-block px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-full text-xs cursor-default hover:bg-indigo-100 transition-colors"
+                    align="center"
+                    gap={2}
+                    px={2}
+                    py={1.5}
+                    rounded="md"
+                    fontSize="sm"
+                    fontWeight="medium"
+                    color="fg"
+                    cursor="pointer"
+                    _hover={{ bg: 'bg.hover' }}
+                    transition="background 0.15s"
+                    textAlign="left"
                   >
-                    {s.name}
-                  </span>
+                    <SubjectHex size={14} />
+                    <Text>{s.name}</Text>
+                  </Flex>
                 ))}
-              </div>
-            </div>
+              </Flex>
+            </Box>
           )}
 
           {/* Tangential subjects */}
           {tangentialSubjects.length > 0 && (
-            <div>
-              <button
-                onClick={(e) => { e.stopPropagation(); setShowTangential(!showTangential); }}
-                className="text-xs font-medium text-slate-500 mb-1.5 flex items-center gap-1 hover:text-slate-700"
+            <Box>
+              <Flex
+                as="button"
+                onClick={(e: React.MouseEvent) => { e.stopPropagation(); setShowTangential(!showTangential); }}
+                fontSize="2xs"
+                fontWeight="semibold"
+                color="fg.muted"
+                textTransform="uppercase"
+                letterSpacing="wider"
+                mb={1.5}
+                align="center"
+                gap={1}
+                _hover={{ color: 'fg' }}
+                cursor="pointer"
               >
-                <Zap className="w-3 h-3 text-amber-500" />
-                Tangential / Wildcard ({tangentialSubjects.length})
+                Tangential ({tangentialSubjects.length})
                 {showTangential ? (
-                  <ChevronDown className="w-3 h-3" />
+                  <Box as={ChevronDown} w={3} h={3} />
                 ) : (
-                  <ChevronRight className="w-3 h-3" />
+                  <Box as={ChevronRight} w={3} h={3} />
                 )}
-              </button>
+              </Flex>
               {showTangential && (
-                <div className="flex flex-wrap gap-1.5">
+                <Flex direction="column" gap={0.5}>
                   {tangentialSubjects.map((s) => (
-                    <span
+                    <Flex
                       key={s.name}
+                      as="button"
                       title={s.reason}
-                      className="inline-block px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-full text-xs cursor-default hover:bg-amber-100 transition-colors"
+                      align="center"
+                      gap={2}
+                      px={2}
+                      py={1.5}
+                      rounded="md"
+                      fontSize="sm"
+                      color="fg.muted"
+                      cursor="pointer"
+                      _hover={{ bg: 'bg.hover', color: 'fg' }}
+                      transition="all 0.15s"
+                      textAlign="left"
                     >
-                      {s.name}
-                    </span>
+                      <SubjectHex size={12} />
+                      <Text>{s.name}</Text>
+                    </Flex>
                   ))}
-                </div>
+                </Flex>
               )}
-            </div>
+            </Box>
           )}
 
           {!isLoading && totalCount === 0 && onRetry && (
-            <button
+            <Text
+              as="button"
               onClick={onRetry}
-              className="text-xs text-indigo-600 hover:text-indigo-800 underline"
+              fontSize="xs"
+              color="fg.muted"
+              _hover={{ color: 'fg' }}
+              cursor="pointer"
             >
               Retry finding related subjects
-            </button>
+            </Text>
           )}
-        </div>
+        </Flex>
       )}
-    </div>
+    </Box>
   );
 }
