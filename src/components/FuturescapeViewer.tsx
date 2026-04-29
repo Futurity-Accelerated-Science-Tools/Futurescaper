@@ -12,7 +12,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Box, Flex, Text, Button, Spinner } from '@chakra-ui/react';
-import { ArrowLeft, FileText, Map as MapIcon } from 'lucide-react';
+import { ArrowLeft, Download, FileText, Map as MapIcon } from 'lucide-react';
 import { MarkerType, type Node, type Edge } from '@xyflow/react';
 import { ReadOnlyMap } from './ReadOnlyMap';
 import { ReportPanel } from './ReportPanel';
@@ -252,6 +252,40 @@ export function FuturescapeViewer({ slug, onBack }: FuturescapeViewerProps) {
         </Flex>
 
         <Flex gap={2}>
+          <Button
+            onClick={() => {
+              const exportData = {
+                input: data.input,
+                consequences: data.consequences,
+                solutions: data.solutions,
+                report: data.report,
+                mapLayout: data.mapLayout,
+              };
+              const blob = new Blob(
+                [JSON.stringify(exportData, null, 2)],
+                { type: 'application/json' }
+              );
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `${slug}-data.json`;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+            }}
+            size="sm"
+            bg="bg.hover"
+            color="fg"
+            rounded="lg"
+            fontWeight="medium"
+            borderWidth="1px"
+            borderColor="border"
+            _hover={{ bg: 'bg.emphasized' }}
+          >
+            <Download size={14} />
+            <Text ml={2} fontSize="sm">Export JSON</Text>
+          </Button>
           {data.report && (
             <Button
               onClick={() => setShowReport(true)}
